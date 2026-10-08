@@ -4,6 +4,7 @@
   © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
 
   1단계: 구글 로그인 · 채점 스프레드시트 연결/생성 · 설정(API 키·모델·속도) · 개인정보 안내
+  2단계: 평가 관리(단일/다중 문항 · 소문항 · 문항별 페이지 · 답란 위치 힌트 · 모범답안 · 핵심요소) · 루브릭 설정(AI 초안/검토)
   - 서버 없음. 데이터는 사용자 본인 Google Drive의 스프레드시트에만 저장됩니다.
   - 권한 범위: drive.file (이 앱이 만들었거나 사용자가 직접 고른 파일만 접근)
   - 스프레드시트 구조는 Apps Script 버전(v12)과 동일 → 기존 채점 데이터 그대로 사용 가능
@@ -106,6 +107,89 @@
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #C9D0F5; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+
+    /* ---- 2단계: 공통 폼/모달 ---- */
+    .form-row textarea { width: 100%; padding: 9px 11px; border: 1px solid #D5DCE8; border-radius: 8px; font-size: 13px; font-family: inherit; line-height: 1.5; resize: vertical; }
+    .form-row textarea:focus { outline: none; border-color: var(--primary); }
+    .form-row input[type=number] { width: 100%; padding: 9px 11px; border: 1px solid #D5DCE8; border-radius: 8px; font-size: 13px; font-family: inherit; }
+    .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+    @media (max-width: 640px) { .form-row-inline { grid-template-columns: 1fr; } }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; }
+    .checkbox-row input { width: 16px; height: 16px; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(20,20,30,.45); display: none; align-items: flex-start; justify-content: center; z-index: 500; overflow-y: auto; padding: 30px 12px; }
+    .modal-overlay.show { display: flex; }
+    .modal { background: #fff; border-radius: 14px; width: 100%; max-width: 760px; padding: 22px 24px; box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .modal-title { font-size: 17px; font-weight: 700; }
+    .modal-close { background: none; border: none; font-size: 24px; color: var(--muted); cursor: pointer; line-height: 1; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+    .eval-type-selector { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 640px) { .eval-type-selector { grid-template-columns: 1fr; } }
+    .eval-type-option { display: flex; gap: 10px; padding: 11px 13px; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; align-items: flex-start; }
+    .eval-type-option.selected { border-color: var(--primary); background: var(--primary-light); }
+    .eval-type-option input { margin-top: 3px; }
+    .eval-type-option strong { display: block; font-size: 13px; }
+    .eval-type-option span { font-size: 12px; color: var(--muted); }
+
+    .eval-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+    .eval-card .card-title { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .card-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+    .card-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+    .badge-purple { background: #F0E6FF; color: #5B2BB0; }
+    .badge-orange { background: #FFEBD6; color: #9A4B00; }
+    .badge-multi { background: #E0F2F1; color: #00695C; }
+
+    .reference-details { border: 1px dashed #C9D0F5; border-radius: 8px; padding: 8px 12px; margin-top: 8px; background: #FAFBFF; }
+    .reference-details summary { cursor: pointer; font-size: 13px; color: var(--primary-dark); font-weight: 600; }
+    .reference-inner { margin-top: 10px; }
+    .reference-inner textarea { margin-bottom: 8px; }
+
+    /* 문항 편집 블록 (다중 문항 · 소문항) */
+    .q-block { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; background: #FBFBFD; }
+    .q-block.sub { margin-left: 26px; border-left: 3px solid #9FB0F0; background: #F7F9FF; }
+    .q-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .q-label { font-weight: 700; color: var(--primary-dark); font-size: 14px; min-width: 60px; }
+    .q-head select, .q-head input[type=text] { padding: 6px 8px; border: 1px solid #D5DCE8; border-radius: 6px; font-size: 12px; font-family: inherit; }
+    .q-head .hint-input { flex: 1; min-width: 180px; }
+    .q-tools { margin-left: auto; display: flex; gap: 4px; }
+    .q-tools button { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; font-size: 11px; cursor: pointer; color: var(--text-sub); }
+    .q-tools button:hover { background: var(--primary-light); border-color: #C9D0F5; }
+    .q-block textarea { width: 100%; padding: 8px 10px; border: 1px solid #D5DCE8; border-radius: 8px; font-size: 13px; font-family: inherit; line-height: 1.5; resize: vertical; }
+    .q-add-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+    .page-summary { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+
+    /* 루브릭 */
+    .question-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .question-tab { padding: 7px 13px; border: 1.5px solid var(--border); border-radius: 20px; background: #fff; font-size: 13px; cursor: pointer; color: var(--text-sub); }
+    .question-tab.active { border-color: var(--primary); background: var(--primary); color: #fff; font-weight: 600; }
+    .question-tab.done:not(.active) { border-color: #9CD3AE; background: var(--green-bg); color: var(--green); }
+    .question-tab.dirty:not(.active) { border-color: #E0A93B; background: var(--amber-bg); color: var(--amber); }
+    .ai-collab-panel { background: linear-gradient(135deg, #F5F7FF, #EEF1FF); border: 1px solid #D4DAF5; border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+    .criterion-editor { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+    .criterion-editor-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .criterion-editor input[type=text] { width: 100%; padding: 8px 10px; border: 1px solid #D5DCE8; border-radius: 8px; font-size: 13px; font-family: inherit; }
+    .scale-grid-head, .scale-editor { display: grid; grid-template-columns: 80px 70px 1fr 1fr; gap: 8px; }
+    .scale-grid-head { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+    .scale-editor { margin-bottom: 8px; }
+    .scale-editor input, .scale-editor textarea { padding: 7px 8px; border: 1px solid #D5DCE8; border-radius: 6px; font-size: 12px; font-family: inherit; width: 100%; }
+    .scale-editor textarea { min-height: 58px; resize: vertical; line-height: 1.45; }
+    .scale-editor .sc-level { background: #F3F4F8; font-weight: 600; text-align: center; }
+    @media (max-width: 640px) { .scale-grid-head { display: none; } .scale-editor { grid-template-columns: 1fr 1fr; } }
+    .ai-result-card { border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; border: 1px solid; }
+    .ai-result-card.loading-state { background: #F8F9FC; border-color: var(--border); color: var(--muted); }
+    .ai-result-card.error-state { background: var(--red-bg); border-color: #F2C0C0; color: var(--red); }
+    .ai-result-card.success-state { background: #F5F7FF; border-color: #D4DAF5; }
+    .ai-design-intent { background: #fff; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 10px; line-height: 1.6; }
+    .draft-criterion { background: #fff; border: 1px solid #E0E4F5; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 12px; }
+    .draft-scale { padding: 6px 8px; background: #FAFBFF; border-radius: 6px; margin-top: 6px; line-height: 1.5; }
+    .review-section-card { background: #fff; border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+    .review-section-card-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+    .review-improvement { border-top: 1px dashed var(--border); padding: 8px 0; }
+    .review-improvement:first-of-type { border-top: none; }
+    .q-context { background: #F5F8FF; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; font-size: 13px; line-height: 1.6; }
+    .q-context .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
     footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px 16px 32px; }
     footer a { color: var(--muted); }
   </style>
@@ -177,12 +261,27 @@
 
   <main>
     <section id="tab-evaluations" class="tab-pane active">
-      <div class="section-header"><h2>평가 관리</h2></div>
-      <div class="card"><div class="empty-state"><div class="ei">🧩</div><p><strong>2단계</strong>에서 구현됩니다 — 평가·문항(소문항 포함)·모범답안·핵심요소·루브릭</p></div></div>
+      <div class="section-header">
+        <h2>평가 관리</h2>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-ghost btn-small" onclick="loadEvaluations()">🔄 새로고침</button>
+          <button class="btn btn-primary" onclick="showEvaluationForm()">+ 새 평가 만들기</button>
+        </div>
+      </div>
+      <div class="info-box">
+        평가는 <strong>단일 문항</strong>(답안 1장에 문항 1개) 또는 <strong>다중 문항</strong>(여러 문항, 소문항 1-1·1-2 가능, 한 페이지에 여러 문항 가능)으로 만듭니다.
+        문항별 <strong>모범답안·핵심요소</strong>를 넣으면 채점 일관성이 크게 올라갑니다. 평가를 만든 뒤 <strong>루브릭 설정</strong>에서 문항별 채점 기준을 정하세요.
+      </div>
+      <div id="evaluation-list"><p class="loading">불러오는 중...</p></div>
     </section>
     <section id="tab-rubric" class="tab-pane">
-      <div class="section-header"><h2>루브릭 설정</h2></div>
-      <div class="card"><div class="empty-state"><div class="ei">🧩</div><p><strong>2단계</strong>에서 구현됩니다</p></div></div>
+      <div class="section-header">
+        <h2>루브릭 설정</h2>
+        <div class="form-row" style="margin:0; min-width:260px;">
+          <select id="rubric-eval-select" onchange="openRubricEditor(this.value)"><option value="">평가를 선택하세요</option></select>
+        </div>
+      </div>
+      <div id="rubric-content"><div class="card"><div class="empty-state"><div class="ei">📋</div><p>위에서 평가를 선택하거나, 평가 관리에서 <strong>루브릭 설정</strong> 버튼을 누르세요.</p></div></div></div>
     </section>
     <section id="tab-students" class="tab-pane">
       <div class="section-header"><h2>학생 명단</h2></div>
@@ -256,7 +355,7 @@
       <div class="card">
         <h3>시스템 정보</h3>
         <ul style="list-style:none; font-size:13px; line-height:1.9; color:var(--text-sub);">
-          <li>· 버전: <strong>웹앱 v1 (1단계)</strong> — Apps Script v12 시트 구조 호환</li>
+          <li>· 버전: <strong>웹앱 v2 (2단계)</strong> — Apps Script v12 시트 구조 호환</li>
           <li>· 데이터 저장: 본인 Google Drive 스프레드시트 (서버 없음)</li>
           <li>· API 키 저장: 이 브라우저 (localStorage)</li>
           <li>· 권한 범위: drive.file</li>
@@ -269,6 +368,7 @@
 
 <footer>© 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지 · <a href="privacy.html" target="_blank">개인정보 처리 안내</a></footer>
 <div id="toast" class="toast"></div>
+<div id="modal-overlay" class="modal-overlay"><div class="modal" id="modal-box"></div></div>
 
 <script src="https://apis.google.com/js/api.js" async defer onload="onGapiLoaded()"></script>
 <script>
@@ -294,7 +394,7 @@ const LS = {
    ============================================================ */
 const SHEET_SPECS = [
   { name: '평가목록', headers: ['평가ID','과목','학년','단원','평가명','문항내용','척도단계','AI사용여부','생성일','수정일','평가유형','문항수','학생당페이지수','등급판정방식','모범답안','핵심요소'], bg: {r:.91,g:.92,b:.96} },
-  { name: '문항목록', headers: ['평가ID','문항번호','문항내용','모범답안','핵심요소'], bg: {r:.88,g:.96,b:1} },
+  { name: '문항목록', headers: ['평가ID','문항번호','문항내용','모범답안','핵심요소','표시번호','페이지','답란위치힌트'], bg: {r:.88,g:.96,b:1} },
   { name: '루브릭', headers: ['평가ID','문항번호','기준번호','기준명','척도','점수','판정기준','피드백문구'], bg: {r:.91,g:.96,b:.91} },
   { name: '학생명단', headers: ['학년','반','번호','이름'], bg: {r:1,g:.95,b:.88} },
   { name: '채점결과', headers: ['평가ID','학년','반','번호','이름','기준별점수','총점','만점','등급','최종피드백','교사메모','채점일시','검토상태'], bg: {r:.99,g:.89,b:.93} },
@@ -322,7 +422,14 @@ const SPEEDS = [
 /* ============================================================
    상태
    ============================================================ */
-const state = { token: null, user: null, sheetId: null, gapiReady: false, pickerReady: false };
+const state = {
+  token: null, user: null, sheetId: null, gapiReady: false, pickerReady: false,
+  sheetIds: {},                 // 탭 이름 → sheetId (행 삭제용)
+  evaluations: [],              // 평가 목록
+  formQuestions: [],            // 평가 폼에서 편집 중인 문항 배열
+  // 루브릭 편집
+  currentEvaluation: null, currentQuestions: [], rubricsByQuestion: {}, rubricDraft: {}, currentQuestionIndex: 0, currentRubric: []
+};
 
 /* ============================================================
    유틸
@@ -498,6 +605,7 @@ async function checkAndMigrateSheet(verbose) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requests })
     });
     if (!r.ok) throw new Error('탭 추가 실패 (' + r.status + ')');
+    await getSpreadsheetMeta();  // 새 탭 sheetId 반영
   }
   // 2) 각 탭 1행 헤더 점검 → 부족하면 뒤에 추가 (기존 열 순서는 건드리지 않음)
   const ranges = SHEET_SPECS.map(s => `'${s.name}'!1:1`);
@@ -531,7 +639,9 @@ async function getSpreadsheetMeta() {
   const r = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}?fields=spreadsheetId,properties.title,sheets.properties(title,sheetId,index)`);
   if (r.status === 404 || r.status === 403) throw new Error('연결된 스프레드시트에 접근할 수 없습니다. 삭제되었거나 권한이 없습니다. "다른 시트 연결"을 눌러 다시 고르세요.');
   if (!r.ok) throw new Error('시트 정보 조회 실패 (' + r.status + ')');
-  return r.json();
+  const meta = await r.json();
+  state.sheetIds = {}; (meta.sheets || []).forEach(s => { state.sheetIds[s.properties.title] = s.properties.sheetId; });
+  return meta;
 }
 function disconnectSheet() {
   if (!confirm('이 브라우저에서 스프레드시트 연결을 해제할까요? (시트 자체는 삭제되지 않습니다)')) return;
@@ -623,19 +733,716 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   if (name === 'settings') { renderApiKeyStatus(); renderModelSelect(); renderSpeedSelect(); renderSheetInfo(); }
+  if (name === 'rubric') renderRubricEvalSelect();
 }
 function showLogin() { $('login-screen').style.display = 'block'; $('connect-screen').style.display = 'none'; $('app-screen').style.display = 'none'; }
 function showConnect() { $('login-screen').style.display = 'none'; $('connect-screen').style.display = 'block'; $('app-screen').style.display = 'none'; $('connect-status').innerHTML = ''; }
 function showApp() {
   $('login-screen').style.display = 'none'; $('connect-screen').style.display = 'none'; $('app-screen').style.display = 'block';
   renderApiKeyStatus();
-  // 1단계에서는 설정 탭이 실제 기능이므로 바로 설정으로
-  switchTab('settings');
+  switchTab('evaluations');
+  loadEvaluations();
 }
 function renderUserChip() {
   const c = $('user-chip');
   if (state.user) { c.style.display = 'inline-block'; c.textContent = state.user.email; }
   $('logout-btn').style.display = 'inline-flex';
+}
+
+
+/* ============================================================
+   2단계 — Sheets 데이터 계층 (행 읽기/추가/수정/삭제)
+   ============================================================ */
+const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets/';
+function rangeOf(name, a1) { return encodeURIComponent("'" + name + "'!" + a1); }
+async function readSheet(name) {
+  const r = await authFetch(SHEETS_API + state.sheetId + '/values/' + rangeOf(name, 'A1:Z') + '?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING');
+  if (!r.ok) throw new Error(name + ' 읽기 실패 (' + r.status + ')');
+  const j = await r.json(); return j.values || [];
+}
+async function appendRows(name, rows) {
+  if (!rows.length) return;
+  const r = await authFetch(SHEETS_API + state.sheetId + '/values/' + rangeOf(name, 'A1') + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: rows })
+  });
+  if (!r.ok) throw new Error(name + ' 저장 실패 (' + r.status + '): ' + (await r.text()).slice(0, 160));
+}
+async function updateRange(name, a1, values) {
+  const r = await authFetch(SHEETS_API + state.sheetId + '/values/' + rangeOf(name, a1) + '?valueInputOption=RAW', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values })
+  });
+  if (!r.ok) throw new Error(name + ' 수정 실패 (' + r.status + ')');
+}
+// 조건에 맞는 데이터 행 삭제 (헤더 제외). predicate(row) → true 면 삭제
+async function deleteRowsWhere(name, predicate) {
+  const values = await readSheet(name);
+  const idx = [];
+  for (let i = 1; i < values.length; i++) { if (predicate(values[i] || [])) idx.push(i); }
+  if (!idx.length) return 0;
+  let sheetId = state.sheetIds[name];
+  if (sheetId === undefined) { await getSpreadsheetMeta(); sheetId = state.sheetIds[name]; }
+  if (sheetId === undefined) throw new Error(name + ' 탭을 찾을 수 없습니다');
+  idx.sort((a, b) => b - a);  // 아래부터 지워야 인덱스가 밀리지 않음
+  const requests = idx.map(i => ({ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: i, endIndex: i + 1 } } }));
+  const r = await authFetch(SHEETS_API + state.sheetId + ':batchUpdate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requests })
+  });
+  if (!r.ok) throw new Error(name + ' 행 삭제 실패 (' + r.status + ')');
+  return idx.length;
+}
+function nowStr() { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
+function colIdx(header, name, fallback) { const i = (header || []).indexOf(name); return i >= 0 ? i : fallback; }
+function isTrue(v) { return v === true || v === 'TRUE' || v === 'true' || v === 1; }
+function escapeJs(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n'); }
+
+/* ============================================================
+   2단계 — Gemini 호출 (JSON 응답) — Apps Script callGeminiJSON_ 이식
+   ============================================================ */
+function extractResponseText(candidate) {
+  const parts = (candidate && candidate.content && candidate.content.parts) || [];
+  return parts.filter(p => p.text && p.thought !== true).map(p => p.text).join('');
+}
+async function callGeminiJSON(prompt, opts) {
+  opts = opts || {};
+  const key = getGeminiKey();
+  if (!key) return { success: false, message: 'Gemini API 키가 없습니다. 설정 탭에서 키를 저장해 주세요.' };
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + getModel() + ':generateContent?key=' + encodeURIComponent(key);
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { thinkingConfig: { thinkingLevel: opts.thinking || 'medium' }, maxOutputTokens: opts.maxTokens || 8192, responseMimeType: 'application/json' }
+  };
+  try {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (res.status === 429) return { success: false, message: 'API 호출 한도를 초과했습니다 (429). 잠시 후 다시 시도하거나 Flash-Lite 모델로 바꿔 보세요.' };
+    if (res.status === 503) return { success: false, message: 'AI 서버가 일시적으로 응답하지 않습니다. 1~2분 후 다시 시도해 주세요.' };
+    if (!res.ok) { let t = ''; try { t = (await res.json()).error.message; } catch (e) {} return { success: false, message: 'AI 호출 오류 (' + res.status + ')' + (t ? ': ' + t.slice(0, 160) : '') }; }
+    const result = await res.json();
+    const cand = result.candidates && result.candidates[0];
+    if (!cand) return { success: false, message: 'AI 응답이 비어 있습니다' + (result.promptFeedback ? ' (' + JSON.stringify(result.promptFeedback).slice(0, 120) + ')' : '') };
+    if (cand.finishReason === 'MAX_TOKENS') return { success: false, message: 'AI 응답이 길어서 잘렸습니다. 기준 수를 줄이거나 다시 시도해 주세요.' };
+    const raw = extractResponseText(cand);
+    if (!raw) return { success: false, message: 'AI 응답 내용이 비어 있습니다' };
+    let parsed; try { parsed = JSON.parse(raw); } catch (e) { return { success: false, message: 'AI 응답 형식 오류 (다시 시도해 주세요)' }; }
+    return { success: true, data: parsed };
+  } catch (e) { return { success: false, message: '통신 오류: ' + e.message }; }
+}
+
+/* ============================================================
+   2단계 — 평가 데이터 (평가목록 · 문항목록)
+   ============================================================ */
+// 평가목록 열 순서 (Apps Script v12와 동일)
+// 0 평가ID 1 과목 2 학년 3 단원 4 평가명 5 문항내용 6 척도단계 7 AI사용여부 8 생성일 9 수정일 10 평가유형 11 문항수 12 학생당페이지수 13 등급판정방식 14 모범답안 15 핵심요소
+function parseEvaluationRow(row) {
+  const evalType = String(row[10] || '단일문항');
+  return {
+    id: String(row[0]), subject: String(row[1] || ''), grade: Number(row[2]) || 0, unit: String(row[3] || ''), name: String(row[4] || ''),
+    question: String(row[5] || ''), scaleType: String(row[6] || '3단계'), useAI: isTrue(row[7]),
+    createdAt: String(row[8] || ''), updatedAt: String(row[9] || ''),
+    evalType, questionCount: Number(row[11]) || 1, pagesPerStudent: Number(row[12]) || 1, gradingMethod: String(row[13] || '총점비율'),
+    isMultiQuestion: evalType === '다중문항', modelAnswer: String(row[14] || ''), keyElements: String(row[15] || '')
+  };
+}
+async function getAllEvaluations() {
+  const values = await readSheet('평가목록');
+  const list = [];
+  for (let i = 1; i < values.length; i++) { const row = values[i]; if (row && row[0]) list.push(parseEvaluationRow(row)); }
+  return list;
+}
+function findEvaluation(id) { return state.evaluations.find(e => e.id === id) || null; }
+
+// 문항 레이블 "1-2" → {group:1, sub:2}, "3" → {group:3, sub:0}
+function parseLabel(label) {
+  const m = String(label || '').trim().match(/^(\d+)(?:-(\d+))?$/);
+  if (!m) return null;
+  return { group: parseInt(m[1], 10), sub: m[2] ? parseInt(m[2], 10) : 0 };
+}
+function makeLabel(q) { return q.sub ? q.group + '-' + q.sub : String(q.group); }
+
+// 문항목록 읽기 (표시번호·페이지·답란위치힌트는 헤더로 찾음 — 구버전 시트 호환)
+async function getQuestionsForEvaluation(evaluationId) {
+  const values = await readSheet('문항목록');
+  if (values.length < 2) return [];
+  const h = values[0];
+  const cLabel = colIdx(h, '표시번호', 5), cPage = colIdx(h, '페이지', 6), cHint = colIdx(h, '답란위치힌트', 7);
+  const qs = [];
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i]; if (!r || r[0] !== evaluationId) continue;
+    const number = Number(r[1]) || 1;
+    const lab = parseLabel(r[cLabel]) || { group: number, sub: 0 };
+    qs.push({ number, group: lab.group, sub: lab.sub, label: makeLabel(lab), content: String(r[2] || ''), modelAnswer: String(r[3] || ''), keyElements: String(r[4] || ''),
+      page: Number(r[cPage]) || 1, hint: String(r[cHint] || '') });
+  }
+  qs.sort((a, b) => a.number - b.number);
+  return qs;
+}
+async function saveQuestionsForEvaluation(evaluationId, questions) {
+  await deleteRowsWhere('문항목록', r => r[0] === evaluationId);
+  const rows = questions.filter(q => q && String(q.content || '').trim()).map((q, i) => [
+    evaluationId, Number(q.number) || (i + 1), String(q.content), String(q.modelAnswer || ''), String(q.keyElements || ''),
+    makeLabel(q), Number(q.page) || 1, String(q.hint || '')
+  ]);
+  await appendRows('문항목록', rows);
+}
+// 단일/다중 공통: 채점·루브릭에서 쓰는 문항 배열 (단일 문항은 평가목록의 내용 + 문항목록의 페이지/힌트)
+async function getQuestionList(ev) {
+  const stored = await getQuestionsForEvaluation(ev.id);
+  if (ev.isMultiQuestion) return stored;
+  const s = stored[0] || {};
+  return [{ number: 1, group: 1, sub: 0, label: '1', content: ev.question, modelAnswer: ev.modelAnswer, keyElements: ev.keyElements, page: s.page || 1, hint: s.hint || '' }];
+}
+
+function evaluationRowValues(data, createdAt) {
+  const isMulti = data.evalType === '다중문항';
+  return [
+    data.subject, data.grade, data.unit, data.name,
+    isMulti ? '' : (data.question || ''), data.scaleType, !!data.useAI,
+    createdAt, nowStr(),
+    data.evalType, Number(data.questionCount) || 1, Number(data.pagesPerStudent) || 1, data.gradingMethod || '총점비율',
+    isMulti ? '' : (data.modelAnswer || ''), isMulti ? '' : (data.keyElements || '')
+  ];
+}
+async function createEvaluation(data) {
+  const id = 'EV_' + Date.now();
+  await appendRows('평가목록', [[id].concat(evaluationRowValues(data, nowStr()))]);
+  await saveQuestionsForEvaluation(id, data.questions || []);
+  return id;
+}
+async function updateEvaluation(id, data) {
+  const values = await readSheet('평가목록');
+  let rowIdx = -1; for (let i = 1; i < values.length; i++) { if (values[i] && values[i][0] === id) { rowIdx = i; break; } }
+  if (rowIdx < 0) throw new Error('평가를 찾을 수 없습니다');
+  const created = (values[rowIdx][8]) || nowStr();
+  await updateRange('평가목록', 'B' + (rowIdx + 1) + ':P' + (rowIdx + 1), [evaluationRowValues(data, created)]);
+  await saveQuestionsForEvaluation(id, data.questions || []);
+}
+async function deleteEvaluationData(id) {
+  for (const name of ['평가목록', '문항목록', '루브릭', '채점결과', 'AI원본', '학생페이지매핑', '채점기준샘플']) {
+    try { await deleteRowsWhere(name, r => r[0] === id); } catch (e) { console.warn(name, e); }
+  }
+}
+
+/* ============================================================
+   2단계 — 평가 관리 화면
+   ============================================================ */
+async function loadEvaluations() {
+  const c = $('evaluation-list'); if (c) c.innerHTML = '<p class="loading"><span class="spinner"></span>불러오는 중...</p>';
+  try { state.evaluations = await getAllEvaluations(); renderEvaluationList(); renderRubricEvalSelect(); }
+  catch (e) { if (c) c.innerHTML = '<div class="card"><p class="empty-state">불러오기 실패: ' + escapeHtml(e.message) + '<br><button class="btn btn-secondary btn-small" style="margin-top:8px;" onclick="loadEvaluations()">다시 시도</button></p></div>'; }
+}
+function renderEvaluationList() {
+  const c = $('evaluation-list'); if (!c) return;
+  if (!state.evaluations.length) {
+    c.innerHTML = '<div class="card"><div class="empty-state"><div class="ei">📝</div><h3 style="margin-bottom:6px;">아직 만들어진 평가가 없습니다</h3><p style="margin-bottom:14px;">+ 새 평가 만들기 버튼을 눌러 시작하세요.</p><button class="btn btn-primary" onclick="showEvaluationForm()">+ 새 평가 만들기</button></div></div>';
+    return;
+  }
+  c.innerHTML = state.evaluations.slice().reverse().map(ev => `
+    <div class="eval-card">
+      <div class="card-title">${escapeHtml(ev.name)}</div>
+      <div class="card-meta">
+        <span class="badge badge-blue">${escapeHtml(ev.subject)}</span>
+        <span class="badge badge-orange">${ev.grade}학년</span>
+        <span class="badge badge-green">${escapeHtml(ev.scaleType)}</span>
+        ${ev.useAI ? '<span class="badge badge-purple">AI 채점</span>' : ''}
+        ${ev.isMultiQuestion ? `<span class="badge badge-multi">📝 다중 문항 ${ev.questionCount}개 · 학생당 ${ev.pagesPerStudent}쪽</span>` : '<span class="badge badge-amber">단일 문항</span>'}
+        ${(!ev.isMultiQuestion && (ev.modelAnswer || ev.keyElements)) ? '<span class="badge badge-green">모범답안 있음</span>' : ''}
+      </div>
+      <div style="font-size:12px; color:var(--muted); margin-top:6px;">${escapeHtml(ev.unit || '')}${ev.updatedAt ? ' · 수정 ' + escapeHtml(String(ev.updatedAt).slice(0, 16)) : ''}</div>
+      ${!ev.isMultiQuestion && ev.question ? `<div style="font-size:13px; color:var(--text-sub); margin-top:8px; white-space:pre-wrap;">${escapeHtml(ev.question.length > 160 ? ev.question.slice(0, 160) + '…' : ev.question)}</div>` : ''}
+      <div class="card-actions">
+        <button class="btn btn-secondary btn-small" onclick="openRubricEditor('${ev.id}')">📋 루브릭 설정</button>
+        <button class="btn btn-ghost btn-small" onclick="showEvaluationForm('${ev.id}')">✏️ 수정</button>
+        <button class="btn btn-ghost btn-small" onclick="duplicateEvaluation('${ev.id}')">📄 복제</button>
+        <button class="btn btn-danger btn-small" onclick="confirmDeleteEvaluation('${ev.id}')">삭제</button>
+      </div>
+    </div>`).join('');
+}
+
+function showModal(html) { $('modal-box').innerHTML = html; $('modal-overlay').classList.add('show'); window.scrollTo({ top: 0 }); }
+function closeModal() { $('modal-overlay').classList.remove('show'); $('modal-box').innerHTML = ''; }
+
+async function showEvaluationForm(evaluationId) {
+  const ev = evaluationId ? findEvaluation(evaluationId) : null;
+  let questions = [];
+  if (ev) {
+    showToast('문항 정보를 불러오는 중...');
+    try { questions = await getQuestionsForEvaluation(ev.id); } catch (e) { showToast('문항 불러오기 실패: ' + e.message); return; }
+  }
+  renderEvaluationForm(ev, questions);
+}
+function renderEvaluationForm(ev, existingQuestions) {
+  const isEdit = !!ev;
+  const isMulti = ev ? ev.isMultiQuestion : false;
+  const singleStored = (!isMulti && existingQuestions && existingQuestions[0]) || {};
+  // 편집 중 문항 배열 초기화
+  if (isMulti && existingQuestions.length) state.formQuestions = existingQuestions.map(q => Object.assign({}, q));
+  else state.formQuestions = [newQuestion(1, 0, 1), newQuestion(2, 0, 1)];
+
+  const sel = (v, cur) => v === cur ? 'selected' : '';
+  const html = `
+    <div class="modal-header"><span class="modal-title">${isEdit ? '평가 수정' : '새 평가 만들기'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="form-row">
+      <label>평가 유형 *</label>
+      <div class="eval-type-selector">
+        <label class="eval-type-option ${!isMulti ? 'selected' : ''}"><input type="radio" name="eval-type" value="단일문항" ${!isMulti ? 'checked' : ''} onchange="onEvalTypeChange()"><div><strong>단일 문항</strong><span>답안 1장에 문항 1개 (간단한 형성평가·서술형 한 문제)</span></div></label>
+        <label class="eval-type-option ${isMulti ? 'selected' : ''}"><input type="radio" name="eval-type" value="다중문항" ${isMulti ? 'checked' : ''} onchange="onEvalTypeChange()"><div><strong>다중 문항</strong><span>여러 문항 · 소문항(1-1, 1-2) · 한 페이지에 여러 문항 가능 (단원평가)</span></div></label>
+      </div>
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row" style="margin:0;"><label>과목 *</label><input type="text" id="ev-subject" placeholder="예: 국어, 사회, 과학" value="${ev ? escapeHtml(ev.subject) : ''}"></div>
+      <div class="form-row" style="margin:0;"><label>학년 *</label><select id="ev-grade">${[1,2,3,4,5,6].map(g => `<option value="${g}" ${ev ? (ev.grade === g ? 'selected' : '') : (g === 4 ? 'selected' : '')}>${g}학년</option>`).join('')}</select></div>
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row" style="margin:0;"><label>단원</label><input type="text" id="ev-unit" placeholder="예: 2. 우리 지역의 문화유산" value="${ev ? escapeHtml(ev.unit) : ''}"></div>
+      <div class="form-row" style="margin:0;"><label>척도 단계 *</label><select id="ev-scale-type"><option value="3단계" ${!ev || ev.scaleType === '3단계' ? 'selected' : ''}>3단계 (상/중/하)</option><option value="4단계" ${ev && ev.scaleType === '4단계' ? 'selected' : ''}>4단계 (매우잘함/잘함/보통/노력요함)</option></select></div>
+    </div>
+    <div class="form-row"><label>평가명 *</label><input type="text" id="ev-name" placeholder="예: 4학년 2학기 사회 2단원 서술형 평가" value="${ev ? escapeHtml(ev.name) : ''}"></div>
+
+    <!-- 단일 문항 -->
+    <div id="single-question-section" style="display:${isMulti ? 'none' : 'block'};">
+      <div class="form-row">
+        <label>평가 문항 *</label>
+        <textarea id="ev-question" rows="4" placeholder="학생에게 제시한 문제를 문제지에 인쇄된 그대로 입력하세요. (괄호 힌트까지 그대로 넣으면 AI가 '힌트 베끼기'를 구분합니다)">${ev && !isMulti ? escapeHtml(ev.question) : ''}</textarea>
+        <div class="helper">문항이 자세할수록 AI 채점이 정확해집니다.</div>
+      </div>
+      <div class="form-row-inline">
+        <div class="form-row" style="margin:0;"><label>학생당 답안 페이지 수</label><input type="number" id="ev-single-pages" min="1" max="10" value="${ev && !isMulti ? ev.pagesPerStudent : 1}"><div class="helper">보통 1. 답안이 앞뒤 2쪽이면 2.</div></div>
+        <div class="form-row" style="margin:0;"><label>답란 위치 힌트 (선택)</label><input type="text" id="ev-single-hint" placeholder="예: 문제 아래 네모 칸, 뒷면 전체" value="${escapeHtml(singleStored.hint || '')}"><div class="helper">문제가 인쇄된 답안지에서 학생 글씨를 찾을 위치를 AI에게 알려줍니다.</div></div>
+      </div>
+      <details class="reference-details" ${ev && !isMulti && (ev.modelAnswer || ev.keyElements) ? 'open' : ''}>
+        <summary>📝 채점 정확도 높이기: 모범답안·핵심요소 (선택이지만 강력 권장)</summary>
+        <div class="reference-inner">
+          <div class="form-row"><label>모범 답안</label><textarea id="ev-model-answer" rows="3" placeholder="우수한 답안 예시. AI가 기준점으로 삼되 표현이 다른 답안도 인정합니다.">${ev && !isMulti ? escapeHtml(ev.modelAnswer) : ''}</textarea></div>
+          <div class="form-row" style="margin:0;"><label>핵심 요소</label><textarea id="ev-key-elements" rows="3" placeholder="답안에 담겨야 할 요소를 줄바꿈으로 나열&#10;- 원인을 설명함&#10;- 결과를 설명함&#10;- 원인과 결과를 연결함">${ev && !isMulti ? escapeHtml(ev.keyElements) : ''}</textarea><div class="helper">단어 체크리스트가 아니라 "그 요소를 자기 말로 풀어 썼는지"를 AI가 판단합니다.</div></div>
+        </div>
+      </details>
+    </div>
+
+    <!-- 다중 문항 -->
+    <div id="multi-question-section" style="display:${isMulti ? 'block' : 'none'};">
+      <div class="form-row-inline">
+        <div class="form-row" style="margin:0;"><label>학생당 답안 페이지 수 *</label><input type="number" id="ev-pages" min="1" max="20" value="${ev && isMulti ? ev.pagesPerStudent : 2}" onchange="onPagesChange()"><div class="helper">한 학생의 시험지가 몇 쪽인지. 각 문항이 몇 쪽에 있는지는 아래에서 지정합니다.</div></div>
+        <div class="form-row" style="margin:0;"><label>종합 등급 판정 방식</label><select id="ev-grading-method"><option value="총점비율" ${!ev || ev.gradingMethod !== '문항분포' ? 'selected' : ''}>총점 비율 기반 (표준)</option><option value="문항분포" ${ev && ev.gradingMethod === '문항분포' ? 'selected' : ''}>문항별 등급 분포 기반</option></select><div class="helper">총점 비율: 총점÷만점 / 문항 분포: 각 문항 등급 개수로 판정</div></div>
+      </div>
+      <div class="form-row">
+        <label>문항 목록 *</label>
+        <div class="helper" style="margin-bottom:8px;">문제지에 인쇄된 그대로 입력하세요. <strong>소문항</strong>(1-1, 1-2…)은 각각 따로 채점되고 루브릭도 따로 정합니다. 같은 페이지에 여러 문항이 있어도 됩니다.</div>
+        <div id="questions-input-list"></div>
+        <div class="q-add-bar"><button type="button" class="btn btn-secondary btn-small" onclick="addFormQuestion()">+ 문항 추가</button></div>
+        <div id="page-summary" class="page-summary"></div>
+      </div>
+    </div>
+
+    <div class="form-row checkbox-row"><input type="checkbox" id="ev-use-ai" ${!ev || ev.useAI ? 'checked' : ''}><label for="ev-use-ai" style="margin:0;">AI 채점 사용</label></div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">취소</button><button class="btn btn-primary" id="ev-save-btn" onclick="saveEvaluation('${ev ? ev.id : ''}')">저장</button></div>`;
+  showModal(html);
+  if (isMulti) renderQuestionsInput();
+}
+function newQuestion(group, sub, page) { return { number: 0, group, sub, label: '', content: '', modelAnswer: '', keyElements: '', page: page || 1, hint: '' }; }
+function onEvalTypeChange() {
+  const isMulti = document.querySelector('input[name="eval-type"]:checked').value === '다중문항';
+  document.querySelectorAll('.eval-type-option').forEach(o => o.classList.toggle('selected', o.querySelector('input').checked));
+  $('single-question-section').style.display = isMulti ? 'none' : 'block';
+  $('multi-question-section').style.display = isMulti ? 'block' : 'none';
+  if (isMulti) renderQuestionsInput();
+}
+function formPages() { return Math.max(1, Math.min(20, parseInt(($('ev-pages') || {}).value, 10) || 1)); }
+function onPagesChange() { collectFormQuestions(); const p = formPages(); state.formQuestions.forEach(q => { if (q.page > p) q.page = p; }); renderQuestionsInput(); }
+
+// 번호 재부여: 묶음(group) 순서대로 1,2,3… / 소문항은 g-1, g-2… / 문항번호(채점용)는 전체 순번
+function renumberFormQuestions() {
+  let g = 0, lastGroup = null, sub = 0, n = 0;
+  state.formQuestions.forEach(q => {
+    if (q.group !== lastGroup) { g++; lastGroup = q.group; sub = 0; }
+    q._g = g;
+    if (q.sub) { sub++; q._s = sub; } else q._s = 0;
+  });
+  state.formQuestions.forEach(q => { q.group = q._g; q.sub = q._s; delete q._g; delete q._s; q.number = ++n; q.label = makeLabel(q); });
+}
+function collectFormQuestions() {
+  document.querySelectorAll('#questions-input-list .q-block').forEach(b => {
+    const i = parseInt(b.dataset.idx, 10); const q = state.formQuestions[i]; if (!q) return;
+    q.content = b.querySelector('.q-content').value; q.page = parseInt(b.querySelector('.q-page').value, 10) || 1;
+    q.hint = b.querySelector('.q-hint').value; q.modelAnswer = b.querySelector('.q-ma').value; q.keyElements = b.querySelector('.q-ke').value;
+  });
+}
+function renderQuestionsInput() {
+  const c = $('questions-input-list'); if (!c) return;
+  renumberFormQuestions();
+  const pages = formPages();
+  c.innerHTML = state.formQuestions.map((q, i) => {
+    const hasRef = q.modelAnswer || q.keyElements;
+    return `
+    <div class="q-block ${q.sub ? 'sub' : ''}" data-idx="${i}">
+      <div class="q-head">
+        <span class="q-label">문항 ${q.label}</span>
+        <select class="q-page" title="이 문항이 있는 페이지">${Array.from({ length: pages }, (_, k) => `<option value="${k+1}" ${q.page === k+1 ? 'selected' : ''}>${k+1}쪽</option>`).join('')}</select>
+        <input type="text" class="q-hint hint-input" placeholder="답란 위치 힌트 (예: 문제 아래 네모 칸 / 오른쪽 표 안)" value="${escapeHtml(q.hint)}">
+        <div class="q-tools">
+          <button type="button" onclick="moveFormQuestion(${i},-1)" title="위로">▲</button>
+          <button type="button" onclick="moveFormQuestion(${i},1)" title="아래로">▼</button>
+          <button type="button" onclick="addSubQuestion(${i})" title="이 문항 아래에 소문항 추가">+ 소문항</button>
+          <button type="button" onclick="removeFormQuestion(${i})" title="삭제" style="color:var(--red);">✕</button>
+        </div>
+      </div>
+      <textarea class="q-content" rows="3" placeholder="문항 ${q.label} 내용 (문제지에 인쇄된 그대로)">${escapeHtml(q.content)}</textarea>
+      <details class="reference-details" ${hasRef ? 'open' : ''}>
+        <summary>📝 모범답안·핵심요소 (선택 · 권장)</summary>
+        <div class="reference-inner">
+          <textarea class="q-ma" rows="2" placeholder="문항 ${q.label} 모범 답안">${escapeHtml(q.modelAnswer)}</textarea>
+          <textarea class="q-ke" rows="2" placeholder="문항 ${q.label} 핵심 요소 (줄바꿈으로 나열)">${escapeHtml(q.keyElements)}</textarea>
+        </div>
+      </details>
+    </div>`;
+  }).join('');
+  renderPageSummary();
+  c.querySelectorAll('.q-page').forEach(s => s.addEventListener('change', () => { collectFormQuestions(); renderPageSummary(); }));
+}
+function renderPageSummary() {
+  const el = $('page-summary'); if (!el) return;
+  const pages = formPages(); const byPage = {};
+  state.formQuestions.forEach(q => { (byPage[q.page] = byPage[q.page] || []).push(q.label); });
+  const parts = []; for (let p = 1; p <= pages; p++) parts.push(`${p}쪽: ${byPage[p] ? '문항 ' + byPage[p].join(', ') : '<span style="color:var(--red);">문항 없음</span>'}`);
+  el.innerHTML = '📄 페이지 배치 — ' + parts.join(' &nbsp;|&nbsp; ') + `<br>총 ${state.formQuestions.length}개 문항(소문항 포함)이 각각 채점됩니다.`;
+}
+function addFormQuestion() {
+  collectFormQuestions();
+  const last = state.formQuestions[state.formQuestions.length - 1];
+  const maxGroup = state.formQuestions.reduce((m, q) => Math.max(m, q.group), 0);
+  state.formQuestions.push(newQuestion(maxGroup + 1, 0, last ? last.page : 1));
+  renderQuestionsInput();
+}
+function addSubQuestion(i) {
+  collectFormQuestions();
+  const q = state.formQuestions[i]; if (!q) return;
+  // 소문항이 아니던 문항이면 그 문항을 g-1로 바꾸고 g-2를 추가 / 이미 소문항이면 같은 묶음 끝에 추가
+  if (!q.sub) { q.sub = 1; state.formQuestions.splice(i + 1, 0, Object.assign(newQuestion(q.group, 2, q.page), { hint: '' })); }
+  else {
+    let lastIdx = i; for (let k = i + 1; k < state.formQuestions.length; k++) { if (state.formQuestions[k].group === q.group) lastIdx = k; else break; }
+    state.formQuestions.splice(lastIdx + 1, 0, newQuestion(q.group, 99, state.formQuestions[lastIdx].page));
+  }
+  renderQuestionsInput();
+}
+function removeFormQuestion(i) {
+  collectFormQuestions();
+  const q = state.formQuestions[i]; if (!q) return;
+  if (q.content.trim() && !confirm(`문항 ${q.label}을(를) 삭제할까요?`)) return;
+  state.formQuestions.splice(i, 1);
+  // 묶음에 소문항이 하나만 남으면 일반 문항으로
+  const groups = {}; state.formQuestions.forEach(x => { groups[x.group] = (groups[x.group] || 0) + 1; });
+  state.formQuestions.forEach(x => { if (x.sub && groups[x.group] === 1) x.sub = 0; });
+  if (!state.formQuestions.length) state.formQuestions.push(newQuestion(1, 0, 1));
+  renderQuestionsInput();
+}
+function moveFormQuestion(i, dir) {
+  collectFormQuestions();
+  const j = i + dir; if (j < 0 || j >= state.formQuestions.length) return;
+  const a = state.formQuestions[i], b = state.formQuestions[j];
+  // 소문항은 같은 묶음 안에서만 이동, 일반 문항은 묶음 단위로 이동
+  if (a.group === b.group) {
+    state.formQuestions[i] = b; state.formQuestions[j] = a;
+  } else {
+    if (a.sub) { showToast('소문항은 같은 문항 묶음 안에서만 순서를 바꿀 수 있습니다'); return; }
+    const blockOf = g => { const s = state.formQuestions.findIndex(x => x.group === g); let e = s; while (e + 1 < state.formQuestions.length && state.formQuestions[e + 1].group === g) e++; return [s, e]; };
+    const [as, ae] = blockOf(a.group); const [bs, be] = blockOf(b.group);
+    const A = state.formQuestions.slice(as, ae + 1), B = state.formQuestions.slice(bs, be + 1);
+    if (dir < 0) state.formQuestions.splice(bs, A.length + B.length, ...A, ...B); else state.formQuestions.splice(as, A.length + B.length, ...B, ...A);
+  }
+  renderQuestionsInput();
+}
+
+async function saveEvaluation(id) {
+  const evalType = document.querySelector('input[name="eval-type"]:checked').value;
+  const isMulti = evalType === '다중문항';
+  const data = {
+    subject: $('ev-subject').value.trim(), grade: parseInt($('ev-grade').value, 10), unit: $('ev-unit').value.trim(), name: $('ev-name').value.trim(),
+    scaleType: $('ev-scale-type').value, useAI: $('ev-use-ai').checked, evalType
+  };
+  if (!data.subject || !data.grade || !data.name) { showToast('* 표시된 항목을 모두 입력해 주세요'); return; }
+  if (isMulti) {
+    collectFormQuestions(); renumberFormQuestions();
+    const missing = state.formQuestions.filter(q => !q.content.trim()).map(q => q.label);
+    if (missing.length) { showToast('문항 ' + missing.join(', ') + ' 내용을 입력해 주세요'); return; }
+    if (state.formQuestions.length < 1) { showToast('문항을 1개 이상 입력해 주세요'); return; }
+    data.questions = state.formQuestions.map(q => ({ number: q.number, group: q.group, sub: q.sub, content: q.content.trim(), modelAnswer: q.modelAnswer.trim(), keyElements: q.keyElements.trim(), page: q.page, hint: q.hint.trim() }));
+    data.questionCount = data.questions.length; data.pagesPerStudent = formPages(); data.gradingMethod = $('ev-grading-method').value; data.question = '';
+  } else {
+    data.question = $('ev-question').value.trim();
+    if (!data.question) { showToast('평가 문항을 입력해 주세요'); return; }
+    data.modelAnswer = $('ev-model-answer').value.trim(); data.keyElements = $('ev-key-elements').value.trim();
+    data.questionCount = 1; data.pagesPerStudent = Math.max(1, parseInt($('ev-single-pages').value, 10) || 1); data.gradingMethod = '총점비율';
+    // 단일 문항도 문항목록에 1행 저장 (페이지·답란 힌트 보관용 — Apps Script 버전은 이 행을 무시함)
+    data.questions = [{ number: 1, group: 1, sub: 0, content: data.question, modelAnswer: data.modelAnswer, keyElements: data.keyElements, page: 1, hint: $('ev-single-hint').value.trim() }];
+  }
+  const btn = $('ev-save-btn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>저장 중...';
+  try {
+    if (id) await updateEvaluation(id, data); else await createEvaluation(data);
+    closeModal(); showToast(id ? '평가를 수정했습니다' : '새 평가를 만들었습니다');
+    await loadEvaluations();
+    if (id && state.currentEvaluation && state.currentEvaluation.id === id) state.currentEvaluation = findEvaluation(id);
+  } catch (e) { showToast('저장 실패: ' + e.message); btn.disabled = false; btn.textContent = '저장'; }
+}
+async function confirmDeleteEvaluation(id) {
+  const ev = findEvaluation(id); if (!ev) return;
+  if (!confirm(`"${ev.name}" 평가를 삭제할까요?\n\n문항·루브릭·채점 결과·AI 원본·페이지 매핑·채점 기준 샘플이 모두 삭제됩니다. (되돌릴 수 없음)`)) return;
+  showToast('삭제하는 중...');
+  try { await deleteEvaluationData(id); if (state.currentEvaluation && state.currentEvaluation.id === id) { state.currentEvaluation = null; $('rubric-content').innerHTML = ''; } showToast('평가를 삭제했습니다'); await loadEvaluations(); }
+  catch (e) { showToast('삭제 실패: ' + e.message); }
+}
+async function duplicateEvaluation(id) {
+  const ev = findEvaluation(id); if (!ev) return;
+  const newName = prompt('복제할 평가의 새 이름을 입력하세요.\n(문항·모범답안·루브릭이 함께 복사되고, 채점 결과는 복사되지 않습니다)', ev.name + ' (복사본)');
+  if (!newName || !newName.trim()) return;
+  showToast('복제하는 중...');
+  try {
+    const questions = await getQuestionsForEvaluation(id);
+    const data = Object.assign({}, ev, { name: newName.trim(), questions });
+    const newId = await createEvaluation(data);
+    const rubric = await getRubricRows(id);
+    if (rubric.length) await appendRows('루브릭', rubric.map(r => [newId].concat(r.slice(1, 8))));
+    showToast('평가를 복제했습니다'); await loadEvaluations();
+  } catch (e) { showToast('복제 실패: ' + e.message); }
+}
+
+/* ============================================================
+   2단계 — 루브릭 데이터
+   ============================================================ */
+async function getRubricRows(evaluationId) {
+  const values = await readSheet('루브릭');
+  return values.slice(1).filter(r => r && r[0] === evaluationId);
+}
+// 문항번호별 { qNum: [ {number, name, scales:[{level,score,criterion,feedback}]} ] }
+async function getRubricGroupedByQuestion(evaluationId) {
+  const rows = await getRubricRows(evaluationId);
+  const map = {};
+  rows.forEach(r => {
+    const qNum = Number(r[1]) || 1, criNum = Number(r[2]) || 1;
+    const key = qNum + '_' + criNum;
+    if (!map[key]) map[key] = { qNum, number: criNum, name: String(r[3] || ''), scales: [] };
+    map[key].scales.push({ level: String(r[4] || ''), score: Number(r[5]) || 0, criterion: String(r[6] || ''), feedback: String(r[7] || '') });
+  });
+  const grouped = {};
+  Object.values(map).sort((a, b) => a.qNum - b.qNum || a.number - b.number).forEach(c => { (grouped[c.qNum] = grouped[c.qNum] || []).push({ number: c.number, name: c.name, scales: c.scales }); });
+  return grouped;
+}
+async function saveRubricForQuestion(evaluationId, qNum, rubric) {
+  await deleteRowsWhere('루브릭', r => r[0] === evaluationId && (Number(r[1]) || 1) === Number(qNum));
+  const rows = [];
+  rubric.forEach(c => c.scales.forEach(s => rows.push([evaluationId, Number(qNum), c.number, c.name, s.level, Number(s.score) || 0, s.criterion, s.feedback])));
+  await appendRows('루브릭', rows);
+}
+function defaultScales(scaleType) {
+  return scaleType === '3단계'
+    ? [{ level: '상', score: 3 }, { level: '중', score: 2 }, { level: '하', score: 1 }]
+    : [{ level: '매우잘함', score: 4 }, { level: '잘함', score: 3 }, { level: '보통', score: 2 }, { level: '노력요함', score: 1 }];
+}
+
+/* ============================================================
+   2단계 — 루브릭 편집 화면
+   ============================================================ */
+function renderRubricEvalSelect() {
+  const s = $('rubric-eval-select'); if (!s) return;
+  const cur = state.currentEvaluation ? state.currentEvaluation.id : '';
+  s.innerHTML = '<option value="">평가를 선택하세요</option>' + state.evaluations.slice().reverse().map(ev => `<option value="${ev.id}" ${ev.id === cur ? 'selected' : ''}>${escapeHtml(ev.name)} (${ev.grade}학년 ${escapeHtml(ev.subject)})</option>`).join('');
+}
+async function openRubricEditor(evaluationId) {
+  if (!evaluationId) return;
+  const ev = findEvaluation(evaluationId); if (!ev) return;
+  state.currentEvaluation = ev; state.rubricDraft = {}; state.currentQuestionIndex = 0;
+  switchTab('rubric');
+  $('rubric-content').innerHTML = '<p class="loading"><span class="spinner"></span>문항과 루브릭을 불러오는 중...</p>';
+  try {
+    const [questions, grouped] = await Promise.all([getQuestionList(ev), getRubricGroupedByQuestion(ev.id)]);
+    state.currentQuestions = questions; state.rubricsByQuestion = grouped;
+    renderRubricEditor();
+  } catch (e) { $('rubric-content').innerHTML = '<div class="card">⚠ ' + escapeHtml(e.message) + '</div>'; }
+}
+function rubricIsDirty(qNum) {
+  if (!state.rubricDraft[qNum]) return false;
+  return JSON.stringify(state.rubricDraft[qNum]) !== JSON.stringify(state.rubricsByQuestion[qNum] || []);
+}
+function renderRubricEditor() {
+  const ev = state.currentEvaluation, qs = state.currentQuestions;
+  const idx = Math.min(state.currentQuestionIndex, Math.max(0, qs.length - 1)); state.currentQuestionIndex = idx;
+  const q = qs[idx];
+  const c = $('rubric-content');
+  if (!q) { c.innerHTML = '<div class="card"><p class="empty-state">이 평가에는 문항이 없습니다. 평가 관리에서 수정해 문항을 추가하세요.</p></div>'; return; }
+  const rubric = state.rubricDraft[q.number] ? state.rubricDraft[q.number] : (state.rubricsByQuestion[q.number] || []).map(x => JSON.parse(JSON.stringify(x)));
+  state.currentRubric = rubric;
+  const doneCount = qs.filter(x => (state.rubricsByQuestion[x.number] || []).length).length;
+  const siblings = qs.filter(x => x.group === q.group && x.number !== q.number).map(x => x.label);
+  c.innerHTML = `
+    <div class="card" style="margin-bottom:12px;">
+      <div style="font-size:15px; font-weight:700; margin-bottom:6px;">${escapeHtml(ev.name)}</div>
+      <div class="card-meta"><span class="badge badge-blue">${escapeHtml(ev.subject)}</span><span class="badge badge-orange">${ev.grade}학년</span><span class="badge badge-green">${escapeHtml(ev.scaleType)}</span>
+        ${ev.isMultiQuestion ? `<span class="badge badge-multi">문항 ${qs.length}개 · 학생당 ${ev.pagesPerStudent}쪽</span>` : '<span class="badge badge-amber">단일 문항</span>'}
+        <span class="badge ${doneCount === qs.length ? 'badge-green' : 'badge-amber'}">루브릭 완성 ${doneCount}/${qs.length}</span></div>
+    </div>
+    ${qs.length > 1 ? `<div class="question-tabs">${qs.map((x, i) => `<button class="question-tab ${i === idx ? 'active' : ''} ${(state.rubricsByQuestion[x.number] || []).length ? 'done' : ''} ${rubricIsDirty(x.number) ? 'dirty' : ''}" onclick="selectQuestionTab(${i})">문항 ${x.label}${rubricIsDirty(x.number) ? ' ●' : ((state.rubricsByQuestion[x.number] || []).length ? ' ✓' : '')}</button>`).join('')}</div>` : ''}
+    <div class="q-context">
+      <div style="font-weight:700; color:var(--primary-dark); margin-bottom:4px;">문항 ${q.label}${ev.isMultiQuestion ? ` · ${q.page}쪽` : ''}${q.hint ? ` · 답란: ${escapeHtml(q.hint)}` : ''}</div>
+      <div style="white-space:pre-wrap;">${escapeHtml(q.content)}</div>
+      ${q.modelAnswer ? `<div class="meta">모범답안: ${escapeHtml(q.modelAnswer.length > 200 ? q.modelAnswer.slice(0, 200) + '…' : q.modelAnswer)}</div>` : ''}
+      ${q.keyElements ? `<div class="meta">핵심요소: ${escapeHtml(q.keyElements.replace(/\n/g, ' / '))}</div>` : ''}
+      ${siblings.length ? `<div class="meta">같은 묶음 소문항: ${siblings.join(', ')}</div>` : ''}
+      ${!q.modelAnswer && !q.keyElements ? '<div class="meta" style="color:var(--amber);">💡 모범답안·핵심요소가 없습니다. 평가 수정에서 넣으면 채점 일관성이 올라갑니다.</div>' : ''}
+    </div>
+    <div class="ai-collab-panel">
+      <div style="font-weight:600; font-size:14px;">교사–AI 협업으로 루브릭 만들기</div>
+      <div style="font-size:12px; color:var(--muted); margin-top:2px;">AI는 단어 맞추기가 아닌 <strong>의미·논리 중심</strong> 기준을 제안하도록 안내됩니다. 최종 결정은 선생님이 합니다.</div>
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-small" onclick="requestAIDraft()">🤖 AI에게 초안 받기</button>
+        <button class="btn btn-secondary btn-small" onclick="requestAIReview()">🔍 AI에게 검토 요청</button>
+      </div>
+    </div>
+    <div id="ai-feedback-area"></div>
+    <div id="criteria-list">${rubric.length ? '' : '<div class="card"><p class="empty-state">아직 채점 기준이 없습니다.<br>+ 기준 추가 또는 AI 초안 받기로 시작하세요.</p></div>'}</div>
+    <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="addCriterion()">+ 기준 추가</button>
+      <button class="btn btn-primary" id="rubric-save-btn" onclick="saveCurrentRubric(false)">문항 ${q.label} 루브릭 저장</button>
+      ${idx < qs.length - 1 ? `<button class="btn btn-ghost" onclick="saveCurrentRubric(true)">저장 후 다음 문항 →</button>` : ''}
+    </div>`;
+  rubric.forEach(cr => renderCriterionEditor(cr));
+}
+function selectQuestionTab(i) {
+  const q = state.currentQuestions[state.currentQuestionIndex];
+  if (q) { const r = collectRubricFromUI(true); state.rubricDraft[q.number] = r; }
+  state.currentQuestionIndex = i; renderRubricEditor();
+}
+function renderCriterionEditor(criterion) {
+  const list = $('criteria-list'); const empty = list.querySelector('.empty-state'); if (empty) empty.closest('.card').remove();
+  const div = document.createElement('div'); div.className = 'criterion-editor'; div.dataset.number = criterion.number;
+  div.innerHTML = `
+    <div class="criterion-editor-header"><span style="font-weight:600;">기준 ${criterion.number}</span><button class="btn btn-danger btn-small" onclick="removeCriterion(${criterion.number})">기준 삭제</button></div>
+    <div class="form-row"><label>기준명</label><input type="text" class="cr-name" value="${escapeHtml(criterion.name)}" placeholder="예: 문화유산 보존의 이유를 자기 말로 설명"></div>
+    <div class="scale-grid-head"><div>척도</div><div>점수</div><div>판정 기준 (AI가 참고)</div><div>피드백 문구</div></div>
+    ${criterion.scales.map(s => `
+      <div class="scale-editor">
+        <input type="text" class="sc-level" value="${escapeHtml(s.level)}" readonly>
+        <input type="number" class="sc-score" value="${s.score}" min="0" max="10">
+        <textarea class="sc-criterion" placeholder="이 척도에 해당하는 답안의 의미적 특징">${escapeHtml(s.criterion || '')}</textarea>
+        <textarea class="sc-feedback" placeholder="이 척도를 받은 학생에게 줄 피드백">${escapeHtml(s.feedback || '')}</textarea>
+      </div>`).join('')}`;
+  list.appendChild(div);
+}
+function addCriterion() {
+  const ev = state.currentEvaluation;
+  const rubric = collectRubricFromUI(true);
+  rubric.push({ number: rubric.length + 1, name: '', scales: defaultScales(ev.scaleType).map(s => ({ level: s.level, score: s.score, criterion: '', feedback: '' })) });
+  const q = state.currentQuestions[state.currentQuestionIndex]; state.rubricDraft[q.number] = rubric; renderRubricEditor();
+}
+function removeCriterion(number) {
+  if (!confirm(`기준 ${number}을(를) 삭제할까요?`)) return;
+  let rubric = collectRubricFromUI(true).filter(c => c.number !== number);
+  rubric.forEach((c, i) => c.number = i + 1);
+  const q = state.currentQuestions[state.currentQuestionIndex]; state.rubricDraft[q.number] = rubric; renderRubricEditor();
+}
+// 화면 → 루브릭 배열. allowEmptyName=true 면 이름 없는 기준도 유지(임시 보관용)
+function collectRubricFromUI(allowEmptyName) {
+  const rubric = [];
+  document.querySelectorAll('#criteria-list .criterion-editor').forEach(ed => {
+    const name = ed.querySelector('.cr-name').value.trim();
+    if (!name && !allowEmptyName) return;
+    const scales = Array.from(ed.querySelectorAll('.scale-editor')).map(se => ({
+      level: se.querySelector('.sc-level').value, score: parseInt(se.querySelector('.sc-score').value, 10) || 0,
+      criterion: se.querySelector('.sc-criterion').value.trim(), feedback: se.querySelector('.sc-feedback').value.trim()
+    }));
+    rubric.push({ number: rubric.length + 1, name, scales });
+  });
+  return rubric;
+}
+async function saveCurrentRubric(goNext) {
+  const q = state.currentQuestions[state.currentQuestionIndex]; if (!q) return;
+  const rubric = collectRubricFromUI(false);
+  if (!rubric.length) { showToast('기준명이 입력된 기준이 최소 1개 필요합니다'); return; }
+  const unnamed = collectRubricFromUI(true).length - rubric.length;
+  if (unnamed > 0 && !confirm(`기준명이 비어 있는 기준 ${unnamed}개는 저장되지 않습니다. 계속할까요?`)) return;
+  const btn = $('rubric-save-btn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>저장 중...';
+  try {
+    await saveRubricForQuestion(state.currentEvaluation.id, q.number, rubric);
+    state.rubricsByQuestion[q.number] = rubric; delete state.rubricDraft[q.number];
+    showToast(`문항 ${q.label} 루브릭을 저장했습니다`);
+    if (goNext && state.currentQuestionIndex < state.currentQuestions.length - 1) state.currentQuestionIndex++;
+    renderRubricEditor();
+  } catch (e) { showToast('저장 실패: ' + e.message); btn.disabled = false; btn.textContent = `문항 ${q.label} 루브릭 저장`; }
+}
+
+/* ---- AI 초안 / 검토 (Apps Script 프롬프트 이식 + 모범답안·핵심요소·소문항 맥락 추가) ---- */
+function scaleInfo(ev) {
+  const is3 = ev.scaleType === '3단계';
+  return { is3, structure: is3 ? '"상" (3점), "중" (2점), "하" (1점)' : '"매우잘함" (4점), "잘함" (3점), "보통" (2점), "노력요함" (1점)',
+    firstLevel: is3 ? '상' : '매우잘함', firstScore: is3 ? 3 : 4, countText: is3 ? '3개(상/중/하)' : '4개(매우잘함/잘함/보통/노력요함)' };
+}
+function questionContextText(ev, q) {
+  const qs = state.currentQuestions;
+  let t = '[평가 정보]\n- 학년/과목: ' + ev.grade + '학년 ' + ev.subject + '\n- 단원: ' + ev.unit + '\n- 평가명: ' + ev.name + '\n';
+  if (ev.isMultiQuestion) {
+    t += '- 평가 유형: 다중 문항 평가(총 ' + qs.length + '문항) 중 문항 ' + q.label + '\n';
+    const sib = qs.filter(x => x.group === q.group && x.number !== q.number);
+    if (sib.length) t += '- 이 문항은 소문항입니다. 같은 묶음의 다른 소문항: ' + sib.map(x => x.label + ' "' + x.content.slice(0, 60) + '"').join(' / ') + ' (이 루브릭은 문항 ' + q.label + '만 평가해야 함)\n';
+  }
+  t += '- 문항 내용: ' + q.content + '\n';
+  if (q.modelAnswer) t += '- 교사가 제공한 모범 답안: ' + q.modelAnswer + '\n';
+  if (q.keyElements) t += '- 교사가 제공한 핵심 요소:\n' + q.keyElements + '\n';
+  return t;
+}
+async function requestAIDraft() {
+  const ev = state.currentEvaluation, q = state.currentQuestions[state.currentQuestionIndex]; if (!q) return;
+  if (!getGeminiKey()) { showToast('설정 탭에서 Gemini API 키를 먼저 저장해 주세요'); return; }
+  if (collectRubricFromUI(false).length && !confirm('현재 작성 중인 루브릭이 있습니다. AI 초안을 받아 적용하면 화면의 내용이 대체됩니다(저장 전까지 시트는 그대로). 계속할까요?')) return;
+  const area = $('ai-feedback-area');
+  area.innerHTML = '<div class="ai-result-card loading-state"><span class="spinner"></span>AI가 문항 ' + q.label + '을 분석해 루브릭 초안을 만드는 중입니다… (보통 10~40초)</div>';
+  const si = scaleInfo(ev);
+  const prompt = '당신은 초등 교사를 돕는 평가 전문가입니다. 다음 평가 문항에 적합한 루브릭 초안을 만들어 주세요.\n\n' +
+    questionContextText(ev, q) + '- 척도: ' + ev.scaleType + ' (' + si.structure + ')\n\n' +
+    '[원칙]\n1. 의미적·논리적 평가 (단순 키워드 포함 여부 아님)\n2. ' + ev.grade + '학년 발달 수준에 맞게\n3. 척도 간 차이는 양(개수)이 아니라 질(깊이·적절성·근거의 연결)로 구분\n4. 같은 의미를 다른 표현으로 써도 인정\n5. 판정 기준은 교사가 그대로 적용할 수 있을 만큼 구체적으로 (어떤 답안이 상/중/하인지 예를 들어)\n' +
+    '6. 핵심 요소가 제공된 경우: 요소 단어를 "언급"만 한 답안과 자기 말로 "풀어 설명"한 답안을 구분하는 기준을 반드시 포함\n7. 문항에 인쇄된 힌트 문구를 그대로 옮겨 적은 것은 높은 척도의 근거가 되지 않음을 반영\n' +
+    (ev.isMultiQuestion ? '8. 이 문항에 특화된 기준만 (다른 문항 내용 X). 기준 1~3개가 적절\n' : '8. 기준 2~4개가 적절\n') +
+    '\nJSON으로만 응답:\n{\n  "designIntent": "설계 의도 2~3문장",\n  "rubric": [{"number": 1, "name": "기준명", "scales": [{"level": "' + si.firstLevel + '", "score": ' + si.firstScore + ', "criterion": "이 척도 답안의 특징", "feedback": "학생에게 줄 피드백"}]}]\n}\n\n척도는 ' + si.countText + '를 모두 포함.';
+  const r = await callGeminiJSON(prompt, { thinking: 'medium', maxTokens: 8192 });
+  if (!r.success || !r.data || !Array.isArray(r.data.rubric)) { area.innerHTML = '<div class="ai-result-card error-state"><strong>오류</strong>: ' + escapeHtml(r.message || 'AI 응답 형식이 올바르지 않습니다') + '</div>'; return; }
+  state._aiDraft = r.data;
+  area.innerHTML = `
+    <div class="ai-result-card success-state">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-weight:700;">🤖 AI가 작성한 루브릭 초안 — 문항 ${q.label}</div><button class="btn btn-ghost btn-small" onclick="$('ai-feedback-area').innerHTML=''">닫기</button></div>
+      <div class="ai-design-intent"><strong>설계 의도</strong><br>${escapeHtml(r.data.designIntent || '')}</div>
+      ${r.data.rubric.map(c => `<div class="draft-criterion"><strong>기준 ${c.number}. ${escapeHtml(c.name)}</strong>${(c.scales || []).map(s => `<div class="draft-scale"><strong>${escapeHtml(s.level)} (${s.score}점)</strong> — ${escapeHtml(s.criterion)}<br><span style="color:var(--muted); font-style:italic;">피드백: ${escapeHtml(s.feedback)}</span></div>`).join('')}</div>`).join('')}
+      <div style="display:flex; gap:8px; margin-top:10px;"><button class="btn btn-primary btn-small" onclick="applyAIDraft()">이 초안 적용하기 (편집 가능)</button><button class="btn btn-ghost btn-small" onclick="requestAIDraft()">다른 초안 받기</button></div>
+      <div class="helper" style="margin-top:6px;">적용 후 각 기준·척도를 수정하고 <strong>저장</strong>을 눌러야 시트에 기록됩니다.</div>
+    </div>`;
+}
+function applyAIDraft() {
+  const d = state._aiDraft; if (!d) return;
+  const ev = state.currentEvaluation; const levels = defaultScales(ev.scaleType);
+  const rubric = d.rubric.map((c, i) => ({
+    number: i + 1, name: String(c.name || ''),
+    scales: levels.map(L => { const f = (c.scales || []).find(s => String(s.level).trim() === L.level) || {}; return { level: L.level, score: f.score != null ? Number(f.score) : L.score, criterion: String(f.criterion || ''), feedback: String(f.feedback || '') }; })
+  }));
+  const q = state.currentQuestions[state.currentQuestionIndex]; state.rubricDraft[q.number] = rubric;
+  renderRubricEditor(); showToast('AI 초안을 적용했습니다. 수정 후 저장하세요.');
+}
+async function requestAIReview() {
+  const ev = state.currentEvaluation, q = state.currentQuestions[state.currentQuestionIndex]; if (!q) return;
+  if (!getGeminiKey()) { showToast('설정 탭에서 Gemini API 키를 먼저 저장해 주세요'); return; }
+  const rubric = collectRubricFromUI(false);
+  if (!rubric.length) { showToast('검토할 루브릭이 없습니다. 먼저 기준을 작성해 주세요.'); return; }
+  const area = $('ai-feedback-area');
+  area.innerHTML = '<div class="ai-result-card loading-state"><span class="spinner"></span>AI가 루브릭을 검토하는 중입니다… (보통 10~30초)</div>';
+  let rt = ''; rubric.forEach(c => { rt += '  기준' + c.number + '. ' + c.name + '\n'; c.scales.forEach(s => { rt += '      "' + s.level + '" (' + s.score + '점) - 판정 기준: ' + (s.criterion || '(미입력)') + '\n'; }); rt += '\n'; });
+  const prompt = '당신은 초등 교사를 돕는 평가 전문가입니다. 다음 루브릭을 검토하고 개선점을 제안해 주세요.\n\n' + questionContextText(ev, q) +
+    '\n[검토 대상 루브릭]\n' + rt + '\n[검토 원칙]\n1. 단순 키워드가 아닌 의미적·논리적 평가가 되도록\n2. ' + ev.grade + '학년 발달 수준에 적합한지\n3. 척도 차이가 양적(개수)이 아닌 질적(깊이, 적절성)으로 구분되는지\n4. 이 문항의 의도를 정확히 반영하는지\n5. 판정 기준이 구체적인지\n6. 같은 의미를 다양한 표현으로 쓰는 것을 인정하는지\n7. 핵심 요소를 "언급"만 한 답안이 최고 척도를 받지 않도록 되어 있는지\n\n' +
+    '다음 JSON으로만 응답:\n{\n  "overallAssessment": "전반 평가 2~3문장",\n  "strengths": ["잘된 점들"],\n  "improvements": [{"criterionNumber": 1, "scaleLevel": "척도명 또는 general", "issue": "문제점", "suggestion": "개선 제안"}],\n  "missingAspects": ["추가 고려 사항"]\n}';
+  const r = await callGeminiJSON(prompt, { thinking: 'medium', maxTokens: 8192 });
+  if (!r.success || !r.data) { area.innerHTML = '<div class="ai-result-card error-state"><strong>오류</strong>: ' + escapeHtml(r.message || '검토 실패') + '</div>'; return; }
+  const rv = r.data;
+  area.innerHTML = `
+    <div class="ai-result-card success-state">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-weight:700;">🔍 AI 검토 결과 — 문항 ${q.label}</div><button class="btn btn-ghost btn-small" onclick="$('ai-feedback-area').innerHTML=''">닫기</button></div>
+      <div class="review-section-card"><div class="review-section-card-title">종합 평가</div><div style="font-size:13px;">${escapeHtml(rv.overallAssessment || '')}</div></div>
+      ${(rv.strengths || []).length ? `<div class="review-section-card"><div class="review-section-card-title" style="color:var(--green);">✓ 잘 작성된 점</div><ul style="font-size:13px; padding-left:18px;">${rv.strengths.map(s => '<li>' + escapeHtml(s) + '</li>').join('')}</ul></div>` : ''}
+      ${(rv.improvements || []).length ? `<div class="review-section-card"><div class="review-section-card-title" style="color:#A85B1C;">💡 개선 제안</div>${rv.improvements.map(im => `<div class="review-improvement"><div style="font-size:12px; color:var(--muted);">기준 ${escapeHtml(String(im.criterionNumber))}${im.scaleLevel && im.scaleLevel !== 'general' ? ' · ' + escapeHtml(im.scaleLevel) : ' (전체)'}</div><div style="font-size:13px; margin-top:3px;"><strong style="color:#A85B1C;">제안:</strong> ${escapeHtml(im.suggestion || '')}</div><div style="font-size:12px; color:var(--text-sub); margin-top:3px;"><em>관찰:</em> ${escapeHtml(im.issue || '')}</div></div>`).join('')}</div>` : ''}
+      ${(rv.missingAspects || []).length ? `<div class="review-section-card"><div class="review-section-card-title" style="color:#2855A8;">+ 추가 고려할 점</div><ul style="font-size:13px; padding-left:18px;">${rv.missingAspects.map(s => '<li>' + escapeHtml(s) + '</li>').join('')}</ul></div>` : ''}
+      <div class="helper" style="margin-top:6px;">AI 제안을 모두 수용할 필요는 없습니다. 교실 맥락과 학생 수준에 맞춰 취사선택하세요.</div>
+    </div>`;
 }
 
 /* ============================================================
