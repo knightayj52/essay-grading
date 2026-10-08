@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<!--
+  논서술형 평가 채점 시스템 — 웹앱 (GitHub Pages 버전)
+  © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
+
+  1단계: 구글 로그인 · 채점 스프레드시트 연결/생성 · 설정(API 키·모델·속도) · 개인정보 안내
+  - 서버 없음. 데이터는 사용자 본인 Google Drive의 스프레드시트에만 저장됩니다.
+  - 권한 범위: drive.file (이 앱이 만들었거나 사용자가 직접 고른 파일만 접근)
+  - 스프레드시트 구조는 Apps Script 버전(v12)과 동일 → 기존 채점 데이터 그대로 사용 가능
+-->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="copyright" content="© 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지">
+  <meta name="description" content="초등 논서술형 평가 AI 보조 채점 시스템 — 교사가 결정하고 AI가 돕습니다">
+  <title>논서술형 평가 채점 시스템</title>
+  <style>
+    :root {
+      --primary: #5566D8; --primary-dark: #2D3D9D; --primary-light: #EEF1FF;
+      --text: #1D1D1F; --text-sub: #3D3D45; --muted: #6E6E73;
+      --border: #E5E5EA; --bg: #F5F6F8; --card: #FFFFFF;
+      --green: #1F7A3D; --green-bg: #E3F5E9; --red: #C92F2F; --red-bg: #FDEBEB;
+      --amber: #8A6100; --amber-bg: #FFF4D9;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+    a { color: var(--primary); }
+
+    .app-header { background: linear-gradient(135deg, #4A5FB8 0%, #5566D8 100%); color: #fff; padding: 14px 20px; }
+    .header-inner { max-width: 1100px; margin: 0 auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .header-inner h1 { font-size: 18px; font-weight: 700; }
+    .subtitle { font-size: 12px; opacity: .85; }
+    .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .user-chip { background: rgba(255,255,255,.18); padding: 4px 10px; border-radius: 14px; }
+
+    .tab-nav { background: var(--card); border-bottom: 1px solid var(--border); display: flex; gap: 2px; padding: 0 20px; overflow-x: auto; }
+    .tab-nav-inner { max-width: 1100px; margin: 0 auto; display: flex; width: 100%; }
+    .tab-btn { background: none; border: none; padding: 12px 14px; font-size: 13px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+    .tab-btn.active { color: var(--primary-dark); border-bottom-color: var(--primary); font-weight: 600; }
+    .tab-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    main { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+    .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+    .section-header h2 { font-size: 18px; }
+
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+    .card h3 { font-size: 15px; margin-bottom: 10px; }
+    .info-box { background: #F0F4FF; border-left: 3px solid var(--primary); border-radius: 0 8px 8px 0; padding: 10px 14px; font-size: 13px; color: var(--text-sub); line-height: 1.6; margin-bottom: 12px; }
+    .info-box.warn { background: var(--amber-bg); border-left-color: #E0A93B; color: #7A5410; }
+    .helper { font-size: 12px; color: var(--muted); line-height: 1.5; margin-top: 6px; }
+
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: 1px solid transparent; font-size: 13px; cursor: pointer; font-weight: 500; text-decoration: none; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-secondary { background: var(--primary-light); color: var(--primary-dark); border-color: #C9D0F5; }
+    .btn-ghost { background: transparent; color: var(--muted); border-color: var(--border); }
+    .btn-danger { background: var(--red-bg); color: var(--red); border-color: #F2C0C0; }
+    .btn-small { padding: 6px 11px; font-size: 12px; }
+    .btn-large { padding: 12px 22px; font-size: 15px; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    .form-row { margin-bottom: 14px; }
+    .form-row label { display: block; font-size: 13px; font-weight: 600; color: var(--text-sub); margin-bottom: 6px; }
+    .form-row input[type=text], .form-row input[type=password], .form-row select { width: 100%; padding: 9px 11px; border: 1px solid #D5DCE8; border-radius: 8px; font-size: 13px; font-family: inherit; }
+    .form-row input:focus, .form-row select:focus { outline: none; border-color: var(--primary); }
+
+    .badge { display: inline-block; padding: 3px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .badge-green { background: var(--green-bg); color: var(--green); }
+    .badge-red { background: var(--red-bg); color: var(--red); }
+    .badge-amber { background: var(--amber-bg); color: var(--amber); }
+    .badge-blue { background: var(--primary-light); color: var(--primary-dark); }
+
+    .login-wrap { max-width: 520px; margin: 60px auto; text-align: center; }
+    .login-wrap .logo { font-size: 44px; margin-bottom: 10px; }
+    .login-wrap h2 { font-size: 20px; margin-bottom: 8px; }
+    .login-wrap p { color: var(--muted); margin-bottom: 22px; line-height: 1.6; }
+    .google-btn { display: inline-flex; align-items: center; gap: 10px; background: #fff; color: #3c4043; border: 1px solid #dadce0; padding: 11px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+    .google-btn:hover { background: #f8f9fa; }
+    .google-btn svg { width: 18px; height: 18px; }
+
+    .choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 640px) { .choice-grid { grid-template-columns: 1fr; } }
+    .choice-card { border: 1.5px solid var(--border); border-radius: 12px; padding: 18px; cursor: pointer; transition: all .15s; background: var(--card); }
+    .choice-card:hover { border-color: var(--primary); background: var(--primary-light); }
+    .choice-card .ci { font-size: 28px; margin-bottom: 8px; }
+    .choice-card strong { display: block; font-size: 14px; margin-bottom: 4px; }
+    .choice-card span { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+    .model-option { display: flex; gap: 10px; padding: 11px 13px; border: 2px solid var(--border); border-radius: 10px; cursor: pointer; align-items: flex-start; margin-bottom: 8px; }
+    .model-option:hover { background: #F8F9FC; }
+    .model-option.selected { border-color: var(--primary); background: var(--primary-light); }
+    .model-option input { margin-top: 3px; flex-shrink: 0; }
+    .model-option strong { font-size: 13px; display: block; }
+    .model-option .desc { font-size: 12px; color: var(--muted); line-height: 1.45; }
+
+    .diag { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; background: #F7F8FA; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; color: var(--text-sub); }
+    .empty-state { text-align: center; color: var(--muted); padding: 40px 20px; }
+    .empty-state .ei { font-size: 36px; margin-bottom: 8px; }
+
+    .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); background: #2D2D33; color: #fff; padding: 10px 18px; border-radius: 10px; font-size: 13px; opacity: 0; pointer-events: none; transition: all .2s; z-index: 999; max-width: 90vw; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .loading { color: var(--muted); font-size: 13px; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #C9D0F5; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px 16px 32px; }
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="header-inner">
+    <h1>논서술형 평가 채점 시스템</h1>
+    <span class="subtitle">AI 보조 채점 · 의미 중심 평가 · 교사가 결정</span>
+    <div class="header-right">
+      <span id="user-chip" class="user-chip" style="display:none;"></span>
+      <span id="api-status-indicator" class="badge badge-amber">API 확인 중</span>
+      <button id="logout-btn" class="btn btn-ghost btn-small" style="display:none; color:#fff; border-color:rgba(255,255,255,.4);" onclick="logout()">로그아웃</button>
+    </div>
+  </div>
+</header>
+
+<!-- 로그인 전 화면 -->
+<section id="login-screen" style="display:none;">
+  <div class="login-wrap">
+    <div class="logo">📝</div>
+    <h2>논서술형 평가 채점 시스템</h2>
+    <p>AI가 답안을 읽고 루브릭에 따라 채점 초안을 만들고,<br>선생님이 검토·확정합니다. 모든 데이터는 <strong>선생님 본인의 Google Drive</strong>에만 저장됩니다.</p>
+    <button class="google-btn" onclick="login(false)">
+      <svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.5l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.3l7.8 6.1C12.3 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"/><path fill="#FBBC05" d="M10.4 28.6A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.1.8-4.6l-7.8-6.1A23.9 23.9 0 0 0 0 24c0 3.9.9 7.5 2.6 10.7l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.2 0 11.6-2 15.4-5.6l-7.5-5.8c-2.1 1.4-4.8 2.3-7.9 2.3-6.3 0-11.7-4.1-13.6-9.9l-7.8 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
+      Google 계정으로 시작하기
+    </button>
+    <p class="helper" style="margin-top:18px;">
+      요청 권한: <strong>이 앱이 만들거나 선생님이 직접 고른 파일만</strong> 접근 (drive.file)<br>
+      <a href="privacy.html" target="_blank">개인정보 처리 안내</a>
+    </p>
+    <div id="login-error" class="info-box warn" style="display:none; text-align:left; margin-top:16px;"></div>
+  </div>
+</section>
+
+<!-- 시트 연결 화면 (로그인 후, 시트 미연결) -->
+<section id="connect-screen" style="display:none;">
+  <div class="login-wrap" style="max-width:720px;">
+    <div class="logo">📊</div>
+    <h2>채점 데이터를 저장할 스프레드시트를 연결하세요</h2>
+    <p>평가·루브릭·학생 명단·채점 결과가 모두 이 스프레드시트에 저장됩니다.<br>Apps Script 버전을 쓰셨다면 <strong>그 스프레드시트를 그대로 연결</strong>하면 기존 데이터가 이어집니다.</p>
+    <div class="choice-grid" style="text-align:left;">
+      <div class="choice-card" onclick="pickExistingSheet()">
+        <div class="ci">📂</div>
+        <strong>기존 스프레드시트 연결</strong>
+        <span>Apps Script 버전에서 쓰던 "서술형평가 채점 시스템" 시트를 고릅니다. 부족한 탭·열은 자동으로 보완됩니다.</span>
+      </div>
+      <div class="choice-card" onclick="createNewSheet()">
+        <div class="ci">✨</div>
+        <strong>새 스프레드시트 만들기</strong>
+        <span>내 Drive에 "서술형평가 채점 시스템" 시트를 새로 만들고 필요한 탭 9개를 자동 생성합니다.</span>
+      </div>
+    </div>
+    <div id="connect-status" class="helper" style="margin-top:16px;"></div>
+  </div>
+</section>
+
+<!-- 메인 앱 -->
+<div id="app-screen" style="display:none;">
+  <nav class="tab-nav"><div class="tab-nav-inner">
+    <button class="tab-btn active" data-tab="evaluations" onclick="switchTab('evaluations')">평가 관리</button>
+    <button class="tab-btn" data-tab="rubric" onclick="switchTab('rubric')">루브릭 설정</button>
+    <button class="tab-btn" data-tab="students" onclick="switchTab('students')">학생 명단</button>
+    <button class="tab-btn" data-tab="grading" onclick="switchTab('grading')">AI 채점</button>
+    <button class="tab-btn" data-tab="results" onclick="switchTab('results')">결과 조회</button>
+    <button class="tab-btn" data-tab="settings" onclick="switchTab('settings')">설정</button>
+  </div></nav>
+
+  <main>
+    <section id="tab-evaluations" class="tab-pane active">
+      <div class="section-header"><h2>평가 관리</h2></div>
+      <div class="card"><div class="empty-state"><div class="ei">🧩</div><p><strong>2단계</strong>에서 구현됩니다 — 평가·문항(소문항 포함)·모범답안·핵심요소·루브릭</p></div></div>
+    </section>
+    <section id="tab-rubric" class="tab-pane">
+      <div class="section-header"><h2>루브릭 설정</h2></div>
+      <div class="card"><div class="empty-state"><div class="ei">🧩</div><p><strong>2단계</strong>에서 구현됩니다</p></div></div>
+    </section>
+    <section id="tab-students" class="tab-pane">
+      <div class="section-header"><h2>학생 명단</h2></div>
+      <div class="card"><div class="empty-state"><div class="ei">🧩</div><p><strong>3단계</strong>에서 구현됩니다 — 학생 명단·답안 폴더·PDF 매칭</p></div></div>
+    </section>
+    <section id="tab-grading" class="tab-pane">
+      <div class="section-header"><h2>AI 채점</h2></div>
+      <div class="card"><div class="empty-state"><div class="ei">🧩</div><p><strong>4단계</strong>에서 구현됩니다 — 채점 엔진·캘리브레이션·병렬 채점</p></div></div>
+    </section>
+    <section id="tab-results" class="tab-pane">
+      <div class="section-header"><h2>결과 조회</h2></div>
+      <div class="card"><div class="empty-state"><div class="ei">🧩</div><p><strong>5단계</strong>에서 구현됩니다 — 검토·결과·현황판</p></div></div>
+    </section>
+
+    <section id="tab-settings" class="tab-pane">
+      <div class="section-header"><h2>설정</h2></div>
+
+      <div class="card">
+        <h3>연결된 스프레드시트</h3>
+        <div id="sheet-info" class="info-box">확인 중...</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <a id="open-sheet-btn" class="btn btn-secondary btn-small" target="_blank" href="#">📊 스프레드시트 열기</a>
+          <button class="btn btn-ghost btn-small" onclick="checkAndMigrateSheet(true)">🔄 구조 점검·보완</button>
+          <button class="btn btn-ghost btn-small" onclick="disconnectSheet()">다른 시트 연결</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Gemini API 키</h3>
+        <div class="info-box">
+          AI 채점에는 Google Gemini API 키가 필요합니다.
+          <a href="https://aistudio.google.com/app/apikey" target="_blank">여기서 발급</a>받을 수 있습니다.
+          키는 <strong>이 브라우저에만</strong> 저장되며 어디로도 전송되지 않습니다(Gemini 호출 시에만 사용).
+        </div>
+        <div id="api-key-status" style="margin-bottom:10px;"></div>
+        <div class="form-row">
+          <label>API 키 입력</label>
+          <input type="password" id="api-key-input" placeholder="AIzaSy로 시작하는 키" autocomplete="off">
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary" onclick="saveApiKey()">키 저장 및 확인</button>
+          <button class="btn btn-danger" onclick="deleteApiKey()">키 삭제</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>AI 모델 선택</h3>
+        <div class="info-box">
+          모든 모델이 Gemini 3.x 세대로, 답하기 전에 '생각하는 단계'를 거쳐 채점 정확도가 높습니다.
+          <strong>일반적으로 3.7 Flash를 권장</strong>하고, 무료 API로 학생 수가 많으면 Flash-Lite, 정밀 채점이 필요하면 3.8 Flash나 3.1 Pro를 고르세요.
+        </div>
+        <div id="model-select-area"></div>
+        <p class="helper">💡 유료 API: 결제가 등록된 키만 넣으면 자동으로 높은 한도가 적용됩니다. 별도 설정은 없습니다.</p>
+      </div>
+
+      <div class="card">
+        <h3>기본 채점 속도</h3>
+        <div class="info-box">
+          여러 학생을 채점할 때의 진행 방식입니다. <strong>유료 API라면 "초고속"</strong>으로 두면 훨씬 빠릅니다.
+        </div>
+        <div id="speed-select-area"></div>
+      </div>
+
+      <div class="card">
+        <h3>시스템 진단</h3>
+        <p class="helper" style="margin-bottom:10px;">로그인·시트·API 키 상태를 한눈에 확인합니다.</p>
+        <button class="btn btn-secondary btn-small" onclick="runDiagnostics()">진단 실행</button>
+        <div id="diagnostics-result" class="diag" style="margin-top:10px; display:none;"></div>
+      </div>
+
+      <div class="card">
+        <h3>시스템 정보</h3>
+        <ul style="list-style:none; font-size:13px; line-height:1.9; color:var(--text-sub);">
+          <li>· 버전: <strong>웹앱 v1 (1단계)</strong> — Apps Script v12 시트 구조 호환</li>
+          <li>· 데이터 저장: 본인 Google Drive 스프레드시트 (서버 없음)</li>
+          <li>· API 키 저장: 이 브라우저 (localStorage)</li>
+          <li>· 권한 범위: drive.file</li>
+          <li>· <a href="privacy.html" target="_blank">개인정보 처리 안내</a></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer>© 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지 · <a href="privacy.html" target="_blank">개인정보 처리 안내</a></footer>
+<div id="toast" class="toast"></div>
+
+<script src="https://apis.google.com/js/api.js" async defer onload="onGapiLoaded()"></script>
+<script>
+/* ============================================================
+   설정 — Google Cloud 콘솔 값으로 채우세요 (생기부 웹앱과 같은 프로젝트 사용 가능)
+   ============================================================ */
+const CONFIG = {
+  CLIENT_ID: '522445423766-m3cop5vh489598e0hkefumd0r202tncp.apps.googleusercontent.com',   // OAuth 2.0 클라이언트 ID (웹 애플리케이션)
+  API_KEY:   'AIzaSyDuMaSWfi7yfybCUJnUvghOcirBA5JzXoE',                                 // Google Cloud API 키 (Picker용 — Gemini 키 아님)
+  APP_ID:    '522445423766',                          // Google Cloud 프로젝트 번호 (Picker가 drive.file로 접근하려면 필요)
+  SCOPES:    'https://www.googleapis.com/auth/drive.file',
+  SHEET_TITLE: '서술형평가 채점 시스템'
+};
+
+// 저장 키 (localStorage)
+const LS = {
+  TOKEN: 'eg_token', TOKEN_EXP: 'eg_token_exp', USER: 'eg_user', LOGGED_BEFORE: 'eg_logged_before',
+  SHEET_ID: 'eg_sheet_id', GEMINI_KEY: 'eg_gemini_key', MODEL: 'eg_model', SPEED: 'eg_speed'
+};
+
+/* ============================================================
+   시트 구조 — Apps Script v12와 동일 (호환 유지)
+   ============================================================ */
+const SHEET_SPECS = [
+  { name: '평가목록', headers: ['평가ID','과목','학년','단원','평가명','문항내용','척도단계','AI사용여부','생성일','수정일','평가유형','문항수','학생당페이지수','등급판정방식','모범답안','핵심요소'], bg: {r:.91,g:.92,b:.96} },
+  { name: '문항목록', headers: ['평가ID','문항번호','문항내용','모범답안','핵심요소'], bg: {r:.88,g:.96,b:1} },
+  { name: '루브릭', headers: ['평가ID','문항번호','기준번호','기준명','척도','점수','판정기준','피드백문구'], bg: {r:.91,g:.96,b:.91} },
+  { name: '학생명단', headers: ['학년','반','번호','이름'], bg: {r:1,g:.95,b:.88} },
+  { name: '채점결과', headers: ['평가ID','학년','반','번호','이름','기준별점수','총점','만점','등급','최종피드백','교사메모','채점일시','검토상태'], bg: {r:.99,g:.89,b:.93} },
+  { name: 'AI원본', headers: ['평가ID','학년','반','번호','AI인식텍스트(원본)','교사수정텍스트','AI채점결과','AI피드백','신뢰도','교사수정여부','기록일시','수정일시'], bg: {r:.95,g:.9,b:.96} },
+  { name: '학생페이지매핑', headers: ['평가ID','학년','반','번호','시작페이지','끝페이지','결시여부','메모'], bg: {r:1,g:.98,b:.77} },
+  { name: '학년기대치', headers: ['학년','일반 발달 특성','사고력 특성','표현력 특성','루브릭 적용 힌트'], bg: {r:.9,g:.95,b:.95} },
+  { name: '채점기준샘플', headers: ['평가ID','문항번호','학년','반','번호','이름','답안텍스트','교사판정(JSON)','교사메모','저장일시'], bg: {r:1,g:.94,b:.96} }
+];
+
+/* ============================================================
+   AI 모델 / 속도 (영쌤클래스 Gemini 모델 표준)
+   ============================================================ */
+const MODELS = [
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash (권장 · 품질과 비용 균형)', desc: '가장 유능한 Flash 모델. 추론 단계가 있어 채점 정확도가 높고, 비용은 Pro의 1/4 수준입니다.' },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (최신 · 검증 강화)', desc: '어려운 판단에서 스스로 검증 단계를 더 밟습니다. 토큰을 더 쓰지만 신뢰도가 중요할 때 좋습니다.' },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite (저비용 · 무료 한도 넉넉)', desc: '가장 비용 효율적. 무료 API로 학생 수가 많을 때 권장. 품질은 Flash보다 약간 낮습니다.' },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (최고 추론 · 고비용)', desc: '순수 추론 능력 최고. 소수 학생 정밀 채점이나 기준 검증용으로 적합합니다.' }
+];
+const SPEEDS = [
+  { id: 'turbo', name: '⚡ 초고속 (유료 API 전용)', desc: '여러 학생을 동시에 채점해 시간을 크게 단축합니다. 무료 API에서는 한도 초과가 납니다.' },
+  { id: 'normal', name: '빠르게 (유료 API 권장)', desc: '한 명씩 3~4초 간격으로 채점합니다.' },
+  { id: 'slow', name: '천천히 (무료 API 권장)', desc: '한 명씩 25~30초 간격. 느리지만 무료 한도 초과를 막습니다.' }
+];
+
+/* ============================================================
+   상태
+   ============================================================ */
+const state = { token: null, user: null, sheetId: null, gapiReady: false, pickerReady: false };
+
+/* ============================================================
+   유틸
+   ============================================================ */
+function $(id) { return document.getElementById(id); }
+function showToast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(showToast._t); showToast._t = setTimeout(() => t.classList.remove('show'), 2600);
+}
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function redirectUri() {
+  // index.html 이 붙어 있어도 디렉터리 경로로 통일 (OAuth 승인된 리디렉션 URI와 일치시키기 위함)
+  let p = location.pathname.replace(/index\.html$/, '');
+  if (!p.endsWith('/')) p += '/';
+  return location.origin + p;
+}
+
+/* ============================================================
+   로그인 — OAuth 2.0 (리다이렉트 방식, 로그인 유지)
+   - 토큰은 약 1시간 유효. 만료되면 prompt=none 으로 조용히 재발급(구글 세션이 살아있으면 화면 깜빡임만 있음)
+   ============================================================ */
+function login(silent) {
+  if (CONFIG.CLIENT_ID.startsWith('YOUR_')) { showLoginError('CONFIG.CLIENT_ID 가 설정되지 않았습니다. index.html 상단의 CONFIG를 채워 주세요.'); return; }
+  const params = new URLSearchParams({
+    client_id: CONFIG.CLIENT_ID,
+    redirect_uri: redirectUri(),
+    response_type: 'token',
+    scope: CONFIG.SCOPES + ' openid email profile',
+    include_granted_scopes: 'true',
+    state: 'eg_' + Date.now()
+  });
+  if (silent) params.set('prompt', 'none'); else params.set('prompt', 'select_account');
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+}
+function showLoginError(msg) { const e = $('login-error'); e.style.display = 'block'; e.innerHTML = '⚠ ' + escapeHtml(msg); }
+
+// URL 해시에서 토큰 회수
+function handleAuthRedirect() {
+  if (!location.hash || location.hash.length < 2) return false;
+  const h = new URLSearchParams(location.hash.substring(1));
+  if (h.get('error')) {
+    history.replaceState(null, '', location.pathname + location.search);
+    if (h.get('error') === 'login_required' || h.get('error') === 'interaction_required' || h.get('error') === 'consent_required') {
+      // 조용한 재로그인 실패 → 로그인 버튼 화면으로
+      clearToken(); return false;
+    }
+    showLoginError('로그인 오류: ' + h.get('error') + (h.get('error_description') ? ' — ' + h.get('error_description') : ''));
+    clearToken(); return false;
+  }
+  const token = h.get('access_token');
+  if (!token) return false;
+  const expiresIn = parseInt(h.get('expires_in') || '3600', 10);
+  localStorage.setItem(LS.TOKEN, token);
+  localStorage.setItem(LS.TOKEN_EXP, String(Date.now() + (expiresIn - 60) * 1000));
+  localStorage.setItem(LS.LOGGED_BEFORE, '1');
+  history.replaceState(null, '', location.pathname + location.search);
+  return true;
+}
+function loadToken() {
+  const t = localStorage.getItem(LS.TOKEN), exp = parseInt(localStorage.getItem(LS.TOKEN_EXP) || '0', 10);
+  if (t && Date.now() < exp) { state.token = t; return true; }
+  return false;
+}
+function clearToken() { localStorage.removeItem(LS.TOKEN); localStorage.removeItem(LS.TOKEN_EXP); state.token = null; }
+function logout() {
+  if (!confirm('로그아웃할까요? (스프레드시트 연결과 설정은 이 브라우저에 유지됩니다)')) return;
+  clearToken(); localStorage.removeItem(LS.USER); localStorage.removeItem(LS.LOGGED_BEFORE);
+  location.reload();
+}
+
+// 인증 fetch — 401이면 조용한 재로그인
+async function authFetch(url, options) {
+  options = options || {};
+  options.headers = Object.assign({}, options.headers || {}, { Authorization: 'Bearer ' + state.token });
+  const res = await fetch(url, options);
+  if (res.status === 401) { clearToken(); login(true); throw new Error('로그인이 만료되어 다시 로그인합니다'); }
+  return res;
+}
+async function fetchUserInfo() {
+  try {
+    const res = await authFetch('https://www.googleapis.com/oauth2/v3/userinfo');
+    if (!res.ok) return;
+    const u = await res.json();
+    state.user = { email: u.email, name: u.name };
+    localStorage.setItem(LS.USER, JSON.stringify(state.user));
+  } catch (e) { /* 무시 */ }
+}
+
+/* ============================================================
+   Google Picker (기존 시트 선택)
+   ============================================================ */
+function onGapiLoaded() {
+  state.gapiReady = true;
+  gapi.load('picker', () => { state.pickerReady = true; });
+}
+function pickExistingSheet() {
+  if (!state.pickerReady) { showToast('선택 창을 준비하는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+  if (CONFIG.API_KEY.startsWith('YOUR_') || CONFIG.APP_ID.startsWith('YOUR_')) { showToast('CONFIG.API_KEY / APP_ID 가 설정되지 않았습니다'); return; }
+  const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS).setIncludeFolders(false).setMode(google.picker.DocsViewMode.LIST);
+  const picker = new google.picker.PickerBuilder()
+    .setAppId(CONFIG.APP_ID)
+    .setOAuthToken(state.token)
+    .setDeveloperKey(CONFIG.API_KEY)
+    .addView(view)
+    .setTitle('채점 시스템 스프레드시트 선택')
+    .setLocale('ko')
+    .setCallback(async data => {
+      if (data.action !== google.picker.Action.PICKED) return;
+      const doc = data.docs && data.docs[0]; if (!doc) return;
+      $('connect-status').innerHTML = '<span class="spinner"></span>시트 구조를 확인하는 중...';
+      try {
+        state.sheetId = doc.id; localStorage.setItem(LS.SHEET_ID, doc.id);
+        await checkAndMigrateSheet(false);
+        showToast('스프레드시트를 연결했습니다');
+        showApp();
+      } catch (e) {
+        $('connect-status').innerHTML = '⚠ ' + escapeHtml(e.message);
+        localStorage.removeItem(LS.SHEET_ID); state.sheetId = null;
+      }
+    })
+    .build();
+  picker.setVisible(true);
+}
+
+/* ============================================================
+   Sheets API — 생성 / 구조 점검·보완
+   ============================================================ */
+function headerRow(spec) {
+  return {
+    values: spec.headers.map(h => ({
+      userEnteredValue: { stringValue: h },
+      userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: spec.bg.r, green: spec.bg.g, blue: spec.bg.b } }
+    }))
+  };
+}
+async function createNewSheet() {
+  $('connect-status').innerHTML = '<span class="spinner"></span>새 스프레드시트를 만드는 중...';
+  try {
+    const body = {
+      properties: { title: CONFIG.SHEET_TITLE, locale: 'ko_KR', timeZone: 'Asia/Seoul' },
+      sheets: SHEET_SPECS.map((spec, i) => ({
+        properties: { title: spec.name, index: i, gridProperties: { frozenRowCount: 1, rowCount: 200, columnCount: Math.max(spec.headers.length, 8) } },
+        data: [{ startRow: 0, startColumn: 0, rowData: [headerRow(spec)] }]
+      }))
+    };
+    const res = await authFetch('https://sheets.googleapis.com/v4/spreadsheets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error('시트 생성 실패 (' + res.status + '): ' + (await res.text()).slice(0, 200));
+    const ss = await res.json();
+    state.sheetId = ss.spreadsheetId; localStorage.setItem(LS.SHEET_ID, ss.spreadsheetId);
+    showToast('새 스프레드시트를 만들었습니다');
+    showApp();
+  } catch (e) { $('connect-status').innerHTML = '⚠ ' + escapeHtml(e.message); }
+}
+
+// 연결된 시트에 탭/헤더가 부족하면 보완 (Apps Script의 migrateSheet_와 같은 역할)
+async function checkAndMigrateSheet(verbose) {
+  if (!state.sheetId) return;
+  const meta = await getSpreadsheetMeta();
+  const existing = {}; (meta.sheets || []).forEach(s => { existing[s.properties.title] = s.properties; });
+
+  const requests = []; const addedTabs = []; const fixedHeaders = [];
+  // 1) 없는 탭 추가
+  SHEET_SPECS.forEach(spec => {
+    if (!existing[spec.name]) {
+      requests.push({ addSheet: { properties: { title: spec.name, gridProperties: { frozenRowCount: 1, rowCount: 200, columnCount: Math.max(spec.headers.length, 8) } } } });
+      addedTabs.push(spec.name);
+    }
+  });
+  if (requests.length) {
+    const r = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}:batchUpdate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requests })
+    });
+    if (!r.ok) throw new Error('탭 추가 실패 (' + r.status + ')');
+  }
+  // 2) 각 탭 1행 헤더 점검 → 부족하면 뒤에 추가 (기존 열 순서는 건드리지 않음)
+  const ranges = SHEET_SPECS.map(s => `'${s.name}'!1:1`);
+  const vr = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}/values:batchGet?` + ranges.map(r => 'ranges=' + encodeURIComponent(r)).join('&'));
+  if (!vr.ok) throw new Error('헤더 읽기 실패 (' + vr.status + ')');
+  const got = await vr.json();
+  const updates = [];
+  SHEET_SPECS.forEach((spec, i) => {
+    const row = (got.valueRanges && got.valueRanges[i] && got.valueRanges[i].values && got.valueRanges[i].values[0]) || [];
+    if (row.length < spec.headers.length) {
+      const missing = spec.headers.slice(row.length);
+      const startCol = colLetter(row.length + 1);
+      updates.push({ range: `'${spec.name}'!${startCol}1`, values: [missing] });
+      fixedHeaders.push(spec.name + ' (+' + missing.length + '열)');
+    }
+  });
+  if (updates.length) {
+    const ur = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}/values:batchUpdate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ valueInputOption: 'RAW', data: updates })
+    });
+    if (!ur.ok) throw new Error('헤더 보완 실패 (' + ur.status + ')');
+  }
+  if (verbose) {
+    if (!addedTabs.length && !fixedHeaders.length) showToast('시트 구조가 최신입니다. 보완할 것이 없습니다.');
+    else showToast('보완 완료 — 탭 추가: ' + (addedTabs.join(', ') || '없음') + ' / 열 보완: ' + (fixedHeaders.join(', ') || '없음'));
+  }
+  return { addedTabs, fixedHeaders, title: meta.properties && meta.properties.title };
+}
+function colLetter(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+async function getSpreadsheetMeta() {
+  const r = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}?fields=spreadsheetId,properties.title,sheets.properties(title,sheetId,index)`);
+  if (r.status === 404 || r.status === 403) throw new Error('연결된 스프레드시트에 접근할 수 없습니다. 삭제되었거나 권한이 없습니다. "다른 시트 연결"을 눌러 다시 고르세요.');
+  if (!r.ok) throw new Error('시트 정보 조회 실패 (' + r.status + ')');
+  return r.json();
+}
+function disconnectSheet() {
+  if (!confirm('이 브라우저에서 스프레드시트 연결을 해제할까요? (시트 자체는 삭제되지 않습니다)')) return;
+  localStorage.removeItem(LS.SHEET_ID); state.sheetId = null; showConnect();
+}
+
+/* ============================================================
+   설정 — Gemini API 키 / 모델 / 속도
+   ============================================================ */
+function getGeminiKey() { return localStorage.getItem(LS.GEMINI_KEY) || ''; }
+function getModel() { const m = localStorage.getItem(LS.MODEL); return MODELS.some(x => x.id === m) ? m : MODELS[0].id; }
+function getSpeed() { const s = localStorage.getItem(LS.SPEED); return SPEEDS.some(x => x.id === s) ? s : 'normal'; }
+
+function renderApiKeyStatus() {
+  const k = getGeminiKey(); const el = $('api-key-status'); const ind = $('api-status-indicator');
+  if (k) {
+    el.innerHTML = '<span class="badge badge-green">● 저장됨</span> <span class="helper" style="display:inline;">현재 키: ' + escapeHtml(k.slice(0, 8)) + '…</span>';
+    ind.textContent = 'AI 연결됨'; ind.className = 'badge badge-green';
+  } else {
+    el.innerHTML = '<span class="badge badge-red">● 미설정</span> <span class="helper" style="display:inline;">API 키를 입력해야 AI 채점이 가능합니다</span>';
+    ind.textContent = 'API 키 없음'; ind.className = 'badge badge-red';
+  }
+}
+async function saveApiKey() {
+  const k = $('api-key-input').value.trim();
+  if (!k || k.length < 20) { showToast('API 키 형식이 올바르지 않습니다'); return; }
+  showToast('키를 확인하는 중...');
+  try {
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(k));
+    if (!r.ok) { showToast('키 확인 실패 (' + r.status + '). 키를 다시 확인해 주세요.'); return; }
+    localStorage.setItem(LS.GEMINI_KEY, k); $('api-key-input').value = '';
+    renderApiKeyStatus(); showToast('API 키를 저장했습니다');
+  } catch (e) { showToast('키 확인 중 오류: ' + e.message); }
+}
+function deleteApiKey() {
+  if (!confirm('저장된 API 키를 삭제할까요?')) return;
+  localStorage.removeItem(LS.GEMINI_KEY); renderApiKeyStatus(); showToast('API 키를 삭제했습니다');
+}
+function renderModelSelect() {
+  const cur = getModel();
+  $('model-select-area').innerHTML = MODELS.map(m => `
+    <label class="model-option ${m.id === cur ? 'selected' : ''}">
+      <input type="radio" name="ai-model" value="${m.id}" ${m.id === cur ? 'checked' : ''} onchange="selectModel('${m.id}')">
+      <div><strong>${escapeHtml(m.name)}</strong><div class="desc">${escapeHtml(m.desc)}</div></div>
+    </label>`).join('');
+}
+function selectModel(id) { localStorage.setItem(LS.MODEL, id); renderModelSelect(); showToast('AI 모델을 변경했습니다'); }
+function renderSpeedSelect() {
+  const cur = getSpeed();
+  $('speed-select-area').innerHTML = SPEEDS.map(s => `
+    <label class="model-option ${s.id === cur ? 'selected' : ''}">
+      <input type="radio" name="speed" value="${s.id}" ${s.id === cur ? 'checked' : ''} onchange="selectSpeed('${s.id}')">
+      <div><strong>${escapeHtml(s.name)}</strong><div class="desc">${escapeHtml(s.desc)}</div></div>
+    </label>`).join('');
+}
+function selectSpeed(id) { localStorage.setItem(LS.SPEED, id); renderSpeedSelect(); showToast('기본 채점 속도를 저장했습니다'); }
+
+async function renderSheetInfo() {
+  const el = $('sheet-info');
+  try {
+    const meta = await getSpreadsheetMeta();
+    const tabs = (meta.sheets || []).map(s => s.properties.title);
+    const missing = SHEET_SPECS.filter(s => !tabs.includes(s.name)).map(s => s.name);
+    el.innerHTML = `<strong>${escapeHtml(meta.properties.title)}</strong><br>탭 ${tabs.length}개` +
+      (missing.length ? ` · <span class="badge badge-amber">누락 탭 ${missing.length}개 — "구조 점검·보완"을 눌러 주세요</span>` : ' · <span class="badge badge-green">구조 정상</span>');
+    $('open-sheet-btn').href = 'https://docs.google.com/spreadsheets/d/' + state.sheetId;
+  } catch (e) { el.innerHTML = '⚠ ' + escapeHtml(e.message); }
+}
+async function runDiagnostics() {
+  const out = $('diagnostics-result'); out.style.display = 'block'; out.textContent = '진단 중...';
+  const lines = [];
+  lines.push('로그인: ' + (state.token ? 'OK (' + (state.user ? state.user.email : '사용자 정보 없음') + ')' : '토큰 없음'));
+  lines.push('토큰 만료까지: ' + Math.max(0, Math.round((parseInt(localStorage.getItem(LS.TOKEN_EXP) || '0', 10) - Date.now()) / 60000)) + '분');
+  lines.push('스프레드시트 ID: ' + (state.sheetId || '미연결'));
+  try { const m = await getSpreadsheetMeta(); lines.push('시트 접근: OK — ' + m.properties.title + ' (탭 ' + (m.sheets || []).length + '개)'); }
+  catch (e) { lines.push('시트 접근: 실패 — ' + e.message); }
+  lines.push('Gemini API 키: ' + (getGeminiKey() ? '저장됨' : '없음'));
+  lines.push('AI 모델: ' + getModel());
+  lines.push('채점 속도: ' + getSpeed());
+  lines.push('Picker 준비: ' + (state.pickerReady ? 'OK' : '로딩 중/실패'));
+  lines.push('리디렉션 URI: ' + redirectUri());
+  out.textContent = lines.join('\n');
+}
+
+/* ============================================================
+   화면 전환
+   ============================================================ */
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  if (name === 'settings') { renderApiKeyStatus(); renderModelSelect(); renderSpeedSelect(); renderSheetInfo(); }
+}
+function showLogin() { $('login-screen').style.display = 'block'; $('connect-screen').style.display = 'none'; $('app-screen').style.display = 'none'; }
+function showConnect() { $('login-screen').style.display = 'none'; $('connect-screen').style.display = 'block'; $('app-screen').style.display = 'none'; $('connect-status').innerHTML = ''; }
+function showApp() {
+  $('login-screen').style.display = 'none'; $('connect-screen').style.display = 'none'; $('app-screen').style.display = 'block';
+  renderApiKeyStatus();
+  // 1단계에서는 설정 탭이 실제 기능이므로 바로 설정으로
+  switchTab('settings');
+}
+function renderUserChip() {
+  const c = $('user-chip');
+  if (state.user) { c.style.display = 'inline-block'; c.textContent = state.user.email; }
+  $('logout-btn').style.display = 'inline-flex';
+}
+
+/* ============================================================
+   시작
+   ============================================================ */
+(async function init() {
+  handleAuthRedirect();
+  if (!loadToken()) {
+    // 전에 로그인한 적이 있으면 조용히 재로그인 시도 (로그인 유지)
+    if (localStorage.getItem(LS.LOGGED_BEFORE) === '1' && !location.hash && !CONFIG.CLIENT_ID.startsWith('YOUR_')) {
+      // 무한 리다이렉트 방지: 1회만
+      if (!sessionStorage.getItem('eg_silent_tried')) { sessionStorage.setItem('eg_silent_tried', '1'); login(true); return; }
+    }
+    showLogin(); renderApiKeyStatus(); return;
+  }
+  sessionStorage.removeItem('eg_silent_tried');
+  const cached = localStorage.getItem(LS.USER); if (cached) { try { state.user = JSON.parse(cached); } catch (e) {} }
+  await fetchUserInfo();
+  renderUserChip();
+
+  state.sheetId = localStorage.getItem(LS.SHEET_ID);
+  if (!state.sheetId) { showConnect(); renderApiKeyStatus(); return; }
+  try {
+    await checkAndMigrateSheet(false);  // 접근 확인 + 구조 보완
+    showApp();
+  } catch (e) {
+    showToast(e.message); localStorage.removeItem(LS.SHEET_ID); state.sheetId = null; showConnect();
+  }
+})();
+</script>
+</body>
+</html>

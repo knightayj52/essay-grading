@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!-- © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지 -->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="copyright" content="© 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지">
+  <title>개인정보 처리 안내 — 논서술형 평가 채점 시스템</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif; background: #F5F6F8; color: #1D1D1F; line-height: 1.7; margin: 0; }
+    main { max-width: 760px; margin: 0 auto; padding: 32px 20px 48px; }
+    .card { background: #fff; border: 1px solid #E5E5EA; border-radius: 12px; padding: 24px 28px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .date { color: #6E6E73; font-size: 13px; margin-bottom: 22px; }
+    h2 { font-size: 16px; margin: 22px 0 8px; color: #2D3D9D; }
+    ul { padding-left: 20px; } li { margin-bottom: 4px; }
+    .note { background: #F0F4FF; border-left: 3px solid #5566D8; padding: 10px 14px; border-radius: 0 8px 8px 0; font-size: 13px; }
+    footer { text-align: center; color: #6E6E73; font-size: 12px; padding: 20px; }
+    a { color: #5566D8; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1>개인정보 처리 안내</h1>
+    <div class="date">논서술형 평가 채점 시스템 (웹앱) · 시행일 2026년 10월 8일</div>
+
+    <div class="note">
+      이 앱은 <strong>서버가 없습니다.</strong> 앱이 다루는 모든 데이터는 선생님 본인의 Google Drive와 사용 중인 브라우저에만 저장되며,
+      개발자(영쌤클래스)를 포함한 제3자에게 전송·수집되지 않습니다.
+    </div>
+
+    <h2>1. 수집·저장하는 정보와 위치</h2>
+    <ul>
+      <li><strong>Google 계정 정보(이메일·이름)</strong>: 로그인한 사용자를 화면에 표시하기 위해서만 사용하며, 브라우저에만 저장됩니다.</li>
+      <li><strong>평가·루브릭·학생 명단·채점 결과</strong>: 선생님 본인 Google Drive의 스프레드시트에 저장됩니다. 개발자는 접근할 수 없습니다.</li>
+      <li><strong>학생 답안 PDF</strong>: 선생님 본인 Google Drive의 폴더에 저장되며, 채점 시 선생님의 Gemini API 키로 Google Gemini API에 전송되어 분석됩니다.</li>
+      <li><strong>Gemini API 키</strong>: 선생님이 직접 발급해 입력한 키로, 사용 중인 브라우저(localStorage)에만 저장되고 Gemini 호출 시에만 사용됩니다.</li>
+    </ul>
+
+    <h2>2. 요청하는 Google 권한</h2>
+    <ul>
+      <li><code>drive.file</code>: 이 앱이 만들었거나 선생님이 직접 선택한 파일만 읽고 씁니다. Drive의 다른 파일에는 접근하지 않습니다.</li>
+      <li><code>openid, email, profile</code>: 로그인 사용자 표시용.</li>
+    </ul>
+
+    <h2>3. 제3자 전송</h2>
+    <ul>
+      <li>학생 답안과 채점 지시문은 <strong>선생님의 API 키로 Google Gemini API</strong>에 전송됩니다. 이 처리는 Google의 <a href="https://ai.google.dev/gemini-api/terms" target="_blank">Gemini API 이용약관</a>을 따릅니다. 유료 API를 사용하면 입력 데이터가 모델 학습에 사용되지 않습니다.</li>
+      <li>그 외 어떤 서버나 서비스에도 데이터를 보내지 않습니다.</li>
+    </ul>
+
+    <h2>4. 학생 개인정보 보호를 위한 권고</h2>
+    <ul>
+      <li>답안 PDF와 학생 명단에는 교육 목적상 필요한 최소 정보(번호·이름)만 포함하세요.</li>
+      <li>학생 정보가 담긴 스프레드시트와 폴더는 다른 사람과 공유하지 마세요.</li>
+      <li>채점이 끝난 답안 PDF는 학교 규정에 따라 보관하거나 삭제하세요.</li>
+      <li>공용 컴퓨터에서는 사용 후 설정에서 API 키를 삭제하고 로그아웃하세요.</li>
+    </ul>
+
+    <h2>5. 데이터 삭제</h2>
+    <ul>
+      <li>스프레드시트·폴더·PDF는 선생님이 Drive에서 직접 삭제할 수 있습니다.</li>
+      <li>브라우저에 저장된 설정(API 키, 연결 정보)은 앱 설정에서 삭제하거나 브라우저 사이트 데이터를 지우면 삭제됩니다.</li>
+      <li>Google 계정 설정 → 보안 → 서드파티 앱에서 이 앱의 권한을 언제든 철회할 수 있습니다.</li>
+    </ul>
+
+    <h2>6. 문의</h2>
+    <p>영쌤클래스 (knightayj52@gmail.com)</p>
+  </div>
+</main>
+<footer>© 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지</footer>
+</body>
+</html>
