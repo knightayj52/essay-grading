@@ -1269,7 +1269,7 @@ async function getPdfDoc(id) {
   if (!window.pdfjsLib) throw new Error('PDF 라이브러리를 불러오지 못했습니다. 새로고침해 주세요.');
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   const buf = await fetchPdfBytes(id);
-  const doc = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+  const doc = await pdfjsLib.getDocument({ data: buf.slice(0), isEvalSupported: false }).promise;
   state.pdfDocs[id] = doc; state.pageCounts[id] = doc.numPages; return doc;
 }
 async function getPdfPageCount(id) { if (state.pageCounts[id]) return state.pageCounts[id]; const d = await getPdfDoc(id); return d.numPages; }
