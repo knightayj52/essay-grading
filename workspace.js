@@ -86,7 +86,7 @@ renderMatching=function(){baseRenderMatching();const m=state.match;if(!m)return;
 const originalReadSheet=readSheet;let demoSheets={};
 readSheet=async function(name){return workspace.demo?structuredClone(demoSheets[name]||[]):originalReadSheet(name);};
 
-function clearLocalDrafts(){if(workspace.busy)return showToast('채점을 먼저 일시정지하세요.');if(!confirm('이 브라우저의 평가·루브릭·검토 초안과 복구 기록을 삭제할까요? Drive 기록은 유지됩니다.'))return;const keys=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k.startsWith('eg_v4_'))keys.push(k);}keys.forEach(k=>localStorage.removeItem(k));showToast('브라우저 임시 기록을 삭제했습니다.');}
+function clearLocalDrafts(){if(workspace.busy)return showToast('채점을 먼저 일시정지하세요.');if(!confirm('이 브라우저의 평가·루브릭·검토 초안, 품질 테스트 답안·결과와 복구 기록을 삭제할까요? Drive 기록은 유지됩니다.'))return;const keys=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k.startsWith('eg_v4_'))keys.push(k);}keys.forEach(k=>localStorage.removeItem(k));if(typeof quality!=='undefined'){quality.key='';quality.suite=null;quality.report=null;}showToast('브라우저 임시 기록을 삭제했습니다.');}
 function restoreReviewDraft(){const j=currentJob();if(!j)return;const d=readLocal(draftKey('review_'+jobIdentity(j)));if(!d)return;if(d.version!==j.version)return showToast('기준 버전이 달라 이 초안을 복구할 수 없습니다.');if(!confirm('현재 화면에 브라우저의 검토 초안을 불러올까요? Drive에는 저장 버튼을 눌러야 반영됩니다.'))return;Object.assign(j,d);localStorage.removeItem(draftKey('review_'+jobIdentity(j)));showReview(j);grading.reviewDirty=true;}
 // Values interpolated into legacy inline handlers must survive both HTML and JS parsing.
 escapeJs=function(s){return String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/[&<>"\n\r]/g,c=>({'&':'\\x26','<':'\\x3c','>':'\\x3e','"':'\\x22','\n':'\\n','\r':'\\r'}[c]));};

@@ -12,7 +12,7 @@ async function geminiRequest(parts,options={}){
     if(!response.ok){let msg='';try{msg=(await response.json()).error?.message||'';}catch{}throw Error('AI 호출 실패 ('+response.status+') '+msg.slice(0,160));}
     const json=await response.json(),candidate=json.candidates?.[0];
     if(!candidate||candidate.finishReason&&candidate.finishReason!=='STOP')throw Error('AI 응답이 완료되지 않았습니다 ('+(candidate?.finishReason||'빈 응답')+').');
-    const text=extractResponseText(candidate);try{return JSON.parse(text);}catch{throw Error('AI JSON 응답을 읽지 못했습니다. 다시 시도하세요.');}
+    const text=extractResponseText(candidate);try{const parsed=JSON.parse(text);if(options.onResponse)options.onResponse({modelVersion:json.modelVersion||model,usageMetadata:json.usageMetadata||null,finishReason:candidate.finishReason});return parsed;}catch{throw Error('AI JSON 응답을 읽지 못했습니다. 다시 시도하세요.');}
   }
 }
 callGeminiJSON=async function(prompt,opts={}){try{return{success:true,data:await geminiRequest([{text:prompt}],{maxTokens:opts.maxTokens})};}catch(e){return{success:false,message:e.message};}};
@@ -70,7 +70,7 @@ async function beginRun(){
 }
 function renderProgress(done,total,label){$('grading-progress').innerHTML=`<div class="progress-panel"><div class="toolbar"><strong>${escapeHtml(label)}</strong><span>${done}/${total}명</span></div><progress value="${done}" max="${Math.max(1,total)}"></progress><div class="toolbar">${workspace.busy?'<button class="btn btn-secondary" onclick="pauseRun()">현재 요청 후 일시정지</button>':'<button class="btn btn-secondary" onclick="prepareRun().catch(e=>showToast(e.message))">미완료·실패 답안 재개</button>'}<button class="btn btn-primary" onclick="switchTab('results')">검토·결과 열기</button></div><small>완료된 문항마다 저장됩니다. 탭을 닫으면 진행은 멈춥니다.</small></div>`;}
 function pauseRun(){grading.stop=true;showToast('진행 중인 요청을 저장한 뒤 멈춥니다.');}
-async function gradeQuestion(job,q,correctedText){
+async function gradeQuestion(job,q,correctedText,options={}){
   const rubric=job.rubrics[q.number],parts=[];
   const references=(job.samples||[]).filter(s=>s.question===q.number).slice(-3);
   const prompt=`당신은 초등학교 교사의 평가 검토를 돕습니다. 최종 판정은 교사가 합니다.
@@ -91,8 +91,10 @@ JSON만 반환: {"status":"readable|blank|unreadable","text":"학생 답안","cr
   if(correctedText!==undefined)parts.push({text:'교사가 원본을 보고 수정한 학생 답안입니다. 이 텍스트만 채점하세요:\n'+correctedText});
   else{const pages=job.questions.length===1?Array.from({length:job.endPage-job.startPage+1},(_,i)=>job.startPage+i):[job.startPage+(q.page||1)-1];if(pages.length>20)throw Error('학생당 20쪽 이하로 나누어 주세요.');for(const p of pages){const canvas=await renderPdfPage(job.pdfId,p,1500);parts.push({text:'답안 '+(p-job.startPage+1)+'쪽'},{inlineData:{mimeType:'image/jpeg',data:canvas.toDataURL('image/jpeg',.88).split(',')[1]}});canvas.width=0;canvas.height=0;}}
   if(JSON.stringify(parts).length>18000000)throw Error('답안 이미지가 너무 큽니다. PDF를 나누어 주세요.');
-  const response=await geminiRequest(parts,{model:job.model,rateLimit:true});
-  return{number:q.number,label:q.label,...GradingCore.normalizeAnswer(response,rubric)};
+  let requestMetadata=null;
+  const response=await geminiRequest(parts,{model:job.model,rateLimit:true,onResponse:m=>{requestMetadata=m;}});
+  try{return{number:q.number,label:q.label,...GradingCore.normalizeAnswer(response,rubric),...(options.captureRaw?{rawResponse:response,requestMetadata,requestPrompt:prompt}:{})};}
+  catch(e){if(options.captureRaw)e.rawResponse=response;throw e;}
 }
 async function loadResults(){
   if(grading.reviewDirty&&!confirm('아직 저장하지 않은 검토 내용이 있습니다. 화면을 새로 불러올까요?'))return;
