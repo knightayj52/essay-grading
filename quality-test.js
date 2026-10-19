@@ -19,7 +19,7 @@ async function openQuality(id){
  }
  renderQuality();
 }
-function qualityOptions(){const models=[...workspace.models,...MODELS,{id:getModel(),name:getModel()}];return [...new Map(models.map(m=>[m.id,m])).values()].map(m=>`<option value="${qh(m.id)}">${qh(m.name||m.id)}</option>`).join('');}
+function qualityOptions(){const models=[{id:getModel(),name:getModel()},...(workspace.models.length?workspace.models:MODELS.map(m=>({id:m.id,name:m.id+' · 목록 확인 필요'})))];return [...new Map(models.map(m=>[m.id,m])).values()].map(m=>`<option value="${qh(m.id)}">${qh(m.name||m.id)}</option>`).join('');}
 function renderQuality(){
  const busy=quality.running?'disabled':'';
  $('quality-content').innerHTML=`<div class="info-box">교사 기준과 Gemini 판정을 비교하는 실험 공간입니다. 학생 성적에는 반영되지 않으며, 테스트 답안과 결과는 이 브라우저에 저장됩니다. 기준 점수와 교사 메모는 AI에 보내지 않습니다.</div>
@@ -28,9 +28,9 @@ function renderQuality(){
  <p class="helper">최대 20개 · 상·중·하, 경계 점수, 빈 답안 등을 고르게 넣어 보세요. 가져온 기준은 그 시점의 사본이며 평가를 수정해도 자동으로 바뀌지 않습니다.</p>
  <div class="quality-cases">${quality.suite.length?quality.suite.map((c,i)=>`<div class="quality-case"><div><strong>${qh(c.title)}</strong><small>문항 ${qh(c.question.label)} · ${c.mode==='pdf'?'PDF 인식 + 채점':'텍스트 채점'} · ${qh(statusNames[c.expected.status])} · ${c.expected.criteria.map(x=>qh(x.name)+': '+x.score).join(' / ')}</small><p>${qh((c.input.text||c.expected.text||'(빈 답안)').slice(0,140))}</p></div><button class="btn btn-ghost btn-small" ${busy} onclick="qualityRemove(${i})" aria-label="${qh(c.title)} 삭제">삭제</button></div>`).join(''):'<div class="empty-state">먼저 선생님의 기준 답안을 추가하세요.</div>'}</div>
  <div class="quality-controls"><div class="form-row"><label for="quality-model">기본 모델</label><select id="quality-model" ${busy}>${qualityOptions()}</select></div><div class="form-row"><label for="quality-model2">비교 모델 (선택)</label><select id="quality-model2" ${busy}><option value="">비교하지 않음</option>${qualityOptions()}</select></div><div class="form-row"><label for="quality-reps">답안별 반복 횟수</label><select id="quality-reps" ${busy}><option value="1">1회</option><option value="2">2회</option><option value="3">3회</option></select></div></div>
- <div class="toolbar"><button class="btn btn-primary" ${busy} ${!quality.suite.length?'disabled':''} onclick="qualityPrepare()">${workspace.demo?'가상 테스트 결과 보기':'테스트 실행'}</button><span class="helper">${workspace.demo?'샘플 모드 · Gemini 호출 없음':'API 사용량이 발생합니다. 설정의 요청 간격을 적용합니다.'}</span></div></div>
+ <div class="toolbar"><button class="btn btn-primary" ${busy} ${!quality.suite.length?'disabled':''} onclick="qualityPrepare()">${workspace.demo?'가상 테스트 결과 보기':'테스트 실행'}</button><span class="helper">${workspace.demo?'샘플 모드 · Gemini 호출 없음':'API 사용량이 발생합니다. 설정에서 모델 목록을 갱신해 주세요. 요청 간격도 설정에 따릅니다.'}</span></div></div>
  <div id="quality-report" aria-live="polite"></div>`;
- $('quality-model').value=getModel();renderQualityReport();
+ $('quality-model').value=quality.config?.models[0]||getModel();if(quality.config){$('quality-model2').value=quality.config.models[1]||'';$('quality-reps').value=String(quality.config.repetitions);}renderQualityReport();
 }
 function qualityRemove(i){if(quality.running)return;quality.suite.splice(i,1);qualitySave();renderQuality();}
 function qualityManual(){if(quality.running)return;showModal(`<div class="modal-header"><strong>기준 답안 직접 입력</strong><button class="modal-close" onclick="closeModal()">×</button></div><div class="form-row"><label for="quality-question">문항</label><select id="quality-question" onchange="qualityManualFields()">${quality.questions.map((q,i)=>`<option value="${i}">문항 ${qh(q.label)}</option>`).join('')}</select></div><div class="form-row"><label for="quality-title">답안 별칭 (학생 이름 제외)</label><input id="quality-title" maxlength="60" placeholder="예: 이유는 맞지만 실천이 모호한 답안"></div><div class="form-row"><label for="quality-input">학생 답안 텍스트</label><textarea id="quality-input" rows="5" maxlength="20000"></textarea></div><div class="form-row"><label for="quality-status">교사 기준: 답안 상태</label><select id="quality-status" onchange="qualityManualFields()"><option value="readable">읽을 수 있음</option><option value="blank">빈 답안</option></select></div><div id="quality-expected"></div><p class="helper">판독 불가·필기 인식은 확정 답안을 PDF 방식으로 가져와 테스트하세요.</p><div class="form-row"><label for="quality-note">교사 메모 (AI에 전송하지 않음)</label><input id="quality-note" maxlength="500"></div><button class="btn btn-primary" onclick="qualityAddManual().catch(e=>showToast(e.message))">기준 답안 추가</button>`);qualityManualFields();}
@@ -59,7 +59,7 @@ async function qualityAddImports(){
 function qualityPrepare(){
  if(quality.running||!quality.suite.length)return;
  const models=[...new Set([$('quality-model').value,$('quality-model2').value].filter(Boolean))],repetitions=Number($('quality-reps').value);
- quality.prepared={models,repetitions};
+ quality.prepared={models,repetitions};quality.config={models,repetitions};
  showModal(`<div class="modal-header"><strong>품질 테스트 실행 확인</strong><button class="modal-close" onclick="closeModal()">×</button></div><p>기준 답안 ${quality.suite.length}개 × 모델 ${models.length}개 × ${repetitions}회 = <strong>${quality.suite.length*models.length*repetitions}건</strong></p><p class="helper">실패 요청의 자동 재시도는 추가 호출될 수 있습니다. ${workspace.demo?'체험용 가상 결과만 생성합니다.':'문항·루브릭·답안 텍스트 또는 PDF 이미지가 Gemini로 전송됩니다. 이미지에는 학생 이름이 포함될 수 있습니다.'}<br>교사 기준 점수·메모와 다른 학생의 참고 답안은 보내지 않습니다. 기존 테스트 보고서는 새 결과로 교체됩니다. 필요한 결과는 먼저 JSON으로 내려받으세요.</p><label class="toolbar"><input type="checkbox" id="quality-consent"> ${workspace.demo?'가상 결과임을 확인했습니다.':'위 자료를 Gemini에 보내 품질 테스트를 실행합니다.'}</label><button class="btn btn-primary" onclick="qualityStart().catch(e=>showToast(e.message))">실행</button>`);
 }
 async function qualityStart(){
