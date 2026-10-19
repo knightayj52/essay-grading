@@ -23,18 +23,18 @@
 <main>
   <div class="card">
     <h1>개인정보 처리 안내</h1>
-    <div class="date">논서술형 평가 채점 시스템 (웹앱) · 시행일 2026년 10월 8일</div>
+    <div class="date">논서술형 평가 채점 시스템 (웹앱) · 시행일 2026년 10월 19일</div>
 
     <div class="note">
-      이 앱은 <strong>서버가 없습니다.</strong> 앱이 다루는 모든 데이터는 선생님 본인의 Google Drive와 사용 중인 브라우저에만 저장되며,
-      개발자(영쌤클래스)를 포함한 제3자에게 전송·수집되지 않습니다.
+      평가 기록은 <strong>선생님 본인의 Google Drive</strong>에 저장됩니다. 개발자의 별도 데이터 저장 서버는 없습니다. AI 기능을 사용할 때에는 문항·루브릭·답안 이미지 또는 수정한 답안 텍스트가 <strong>Google Gemini API에 전송</strong>됩니다. 저장 위치와 AI 분석을 위한 전송은 별개입니다.
     </div>
 
     <h2>1. 수집·저장하는 정보와 위치</h2>
     <ul>
       <li><strong>Google 계정 정보(이메일·이름)</strong>: 로그인한 사용자를 화면에 표시하기 위해서만 사용하며, 브라우저에만 저장됩니다.</li>
       <li><strong>평가·루브릭·학생 명단·채점 결과</strong>: 선생님 본인 Google Drive의 스프레드시트에 저장됩니다. 개발자는 접근할 수 없습니다.</li>
-      <li><strong>학생 답안 PDF</strong>: 선생님 본인 Google Drive의 폴더에 저장되며, 채점 시 선생님의 Gemini API 키로 Google Gemini API에 전송되어 분석됩니다.</li>
+      <li><strong>학생 답안 PDF</strong>: 선생님 본인 Google Drive의 폴더에 저장되며, 채점 시 필요한 페이지가 이미지로 변환되어 선생님의 Gemini API 키로 Google Gemini API에 전송됩니다. 이미지에 보이는 이름 등도 포함될 수 있습니다.</li>
+      <li><strong>임시저장·복구 기록</strong>: 작성 중인 평가·루브릭과 저장 성공을 확인하지 못한 채점 작업은 이 브라우저(localStorage)에 남을 수 있습니다. 복구 기록에는 학생 답안·판정이 포함됩니다. 설정의 임시 기록 삭제로 제거할 수 있습니다.</li>
       <li><strong>Gemini API 키</strong>: 선생님이 직접 발급해 입력한 키로, 사용 중인 브라우저(localStorage)에만 저장되고 Gemini 호출 시에만 사용됩니다.</li>
     </ul>
 
@@ -46,7 +46,7 @@
 
     <h2>3. 제3자 전송</h2>
     <ul>
-      <li>학생 답안과 채점 지시문은 <strong>선생님의 API 키로 Google Gemini API</strong>에 전송됩니다. 이 처리는 Google의 <a href="https://ai.google.dev/gemini-api/terms" target="_blank">Gemini API 이용약관</a>을 따릅니다. 유료 API를 사용하면 입력 데이터가 모델 학습에 사용되지 않습니다.</li>
+      <li>학생 답안과 채점 지시문은 <strong>선생님의 API 키로 Google Gemini API</strong>에 전송됩니다. 이 처리는 Google의 <a href="https://ai.google.dev/gemini-api/terms" target="_blank">Gemini API 이용약관</a>을 따릅니다. 데이터 처리 조건은 사용하는 서비스·계정·요금제와 최신 약관에 따라 확인해 주세요.</li>
       <li>그 외 어떤 서버나 서비스에도 데이터를 보내지 않습니다.</li>
     </ul>
 
@@ -55,7 +55,7 @@
       <li>답안 PDF와 학생 명단에는 교육 목적상 필요한 최소 정보(번호·이름)만 포함하세요.</li>
       <li>학생 정보가 담긴 스프레드시트와 폴더는 다른 사람과 공유하지 마세요.</li>
       <li>채점이 끝난 답안 PDF는 학교 규정에 따라 보관하거나 삭제하세요.</li>
-      <li>공용 컴퓨터에서는 사용 후 설정에서 API 키를 삭제하고 로그아웃하세요.</li>
+      <li>공용 컴퓨터에서는 사용 후 설정에서 API 키와 이 브라우저의 임시 기록을 삭제하고 로그아웃하세요.</li>
     </ul>
 
     <h2>5. 데이터 삭제</h2>

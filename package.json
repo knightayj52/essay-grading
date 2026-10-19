@@ -1,0 +1,1 @@
+{"name":"essay-grading","version":"4.0.0","private":true,"scripts":{"test":"node --test tests/*.test.cjs","check":"node --check app.js && node --check workspace.js && node --check grading.js && node --check core.js && node --check boot.js"},"devDependencies":{"jsdom":"26.1.0"}}

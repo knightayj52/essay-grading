@@ -1,0 +1,1520 @@
+
+/* ============================================================
+   설정 — Google Cloud 콘솔 값으로 채우세요 (생기부 웹앱과 같은 프로젝트 사용 가능)
+   ============================================================ */
+const CONFIG = {
+  CLIENT_ID: '522445423766-m3cop5vh489598e0hkefumd0r202tncp.apps.googleusercontent.com',   // OAuth 2.0 클라이언트 ID (웹 애플리케이션)
+  APP_ID:    '522445423766',                          // Google Cloud 프로젝트 번호 (Picker가 drive.file로 접근하려면 필요)
+  SCOPES:    'https://www.googleapis.com/auth/drive.file',
+  SHEET_TITLE: '서술형평가 채점 시스템'
+};
+
+// 저장 키 (localStorage)
+const LS = {
+  TOKEN: 'eg_token', TOKEN_EXP: 'eg_token_exp', USER: 'eg_user', LOGGED_BEFORE: 'eg_logged_before',
+  SHEET_ID: 'eg_sheet_id', GEMINI_KEY: 'eg_gemini_key', MODEL: 'eg_model', SPEED: 'eg_speed'
+};
+
+/* ============================================================
+   시트 구조 — Apps Script v12와 동일 (호환 유지)
+   ============================================================ */
+const SHEET_SPECS = [
+  { name: '평가목록', headers: ['평가ID','과목','학년','단원','평가명','문항내용','척도단계','AI사용여부','생성일','수정일','평가유형','문항수','학생당페이지수','등급판정방식','모범답안','핵심요소'], bg: {r:.91,g:.92,b:.96} },
+  { name: '문항목록', headers: ['평가ID','문항번호','문항내용','모범답안','핵심요소','표시번호','페이지','답란위치힌트'], bg: {r:.88,g:.96,b:1} },
+  { name: '루브릭', headers: ['평가ID','문항번호','기준번호','기준명','척도','점수','판정기준','피드백문구'], bg: {r:.91,g:.96,b:.91} },
+  { name: '학생명단', headers: ['학년','반','번호','이름'], bg: {r:1,g:.95,b:.88} },
+  { name: '채점결과', headers: ['평가ID','학년','반','번호','이름','기준별점수','총점','만점','등급','최종피드백','교사메모','채점일시','검토상태'], bg: {r:.99,g:.89,b:.93} },
+  { name: 'AI원본', headers: ['평가ID','학년','반','번호','AI인식텍스트(원본)','교사수정텍스트','AI채점결과','AI피드백','신뢰도','교사수정여부','기록일시','수정일시'], bg: {r:.95,g:.9,b:.96} },
+  { name: '학생페이지매핑', headers: ['평가ID','학년','반','번호','시작페이지','끝페이지','결시여부','메모'], bg: {r:1,g:.98,b:.77} },
+  { name: '학년기대치', headers: ['학년','일반 발달 특성','사고력 특성','표현력 특성','루브릭 적용 힌트'], bg: {r:.9,g:.95,b:.95} },
+  { name: '채점기준샘플', headers: ['평가ID','문항번호','학년','반','번호','이름','답안텍스트','교사판정(JSON)','교사메모','저장일시'], bg: {r:1,g:.94,b:.96} }
+];
+
+/* ============================================================
+   AI 모델 / 속도 (영쌤클래스 Gemini 모델 표준)
+   ============================================================ */
+const MODELS = [
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash (권장 · 품질과 비용 균형)', desc: '가장 유능한 Flash 모델. 추론 단계가 있어 채점 정확도가 높고, 비용은 Pro의 1/4 수준입니다.' },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (최신 · 검증 강화)', desc: '어려운 판단에서 스스로 검증 단계를 더 밟습니다. 토큰을 더 쓰지만 신뢰도가 중요할 때 좋습니다.' },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite (저비용 · 무료 한도 넉넉)', desc: '가장 비용 효율적. 무료 API로 학생 수가 많을 때 권장. 품질은 Flash보다 약간 낮습니다.' },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (최고 추론 · 고비용)', desc: '순수 추론 능력 최고. 소수 학생 정밀 채점이나 기준 검증용으로 적합합니다.' }
+];
+const SPEEDS = [
+  { id: 'turbo', name: '연속 처리 (유료 API)', desc: '순차 처리하며 학생 사이에 추가 대기하지 않습니다. 한도 오류 시 자동 대기합니다.' },
+  { id: 'normal', name: '빠르게 (유료 API 권장)', desc: '한 명씩 3~4초 간격으로 채점합니다.' },
+  { id: 'slow', name: '여유 있게 (기본)', desc: 'AI 요청 사이 최소 30초 대기. 계정 한도에 따라 추가 대기가 필요할 수 있습니다.' }
+];
+
+/* ============================================================
+   상태
+   ============================================================ */
+const state = {
+  token: null, user: null, sheetId: null, gapiReady: false, pickerReady: false,
+  sheetIds: {},                 // 탭 이름 → sheetId (행 삭제용)
+  evaluations: [],              // 평가 목록
+  formQuestions: [],            // 평가 폼에서 편집 중인 문항 배열
+  // 루브릭 편집
+  currentEvaluation: null, currentQuestions: [], rubricsByQuestion: {}, rubricDraft: {}, currentQuestionIndex: 0, currentRubric: [],
+  // 3단계
+  classes: [], folder: null, pdfs: [], pdfCache: {}, pdfDocs: {}, pageCounts: {}, match: null, gradingSetup: null
+};
+
+/* ============================================================
+   유틸
+   ============================================================ */
+function $(id) { return document.getElementById(id); }
+function showToast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(showToast._t); showToast._t = setTimeout(() => t.classList.remove('show'), 2600);
+}
+function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function redirectUri() {
+  // index.html 이 붙어 있어도 디렉터리 경로로 통일 (OAuth 승인된 리디렉션 URI와 일치시키기 위함)
+  let p = location.pathname.replace(/index\.html$/, '');
+  if (!p.endsWith('/')) p += '/';
+  return location.origin + p;
+}
+
+/* ============================================================
+   로그인 — OAuth 2.0 (리다이렉트 방식, 로그인 유지)
+   - 토큰은 약 1시간 유효. 만료되면 prompt=none 으로 조용히 재발급(구글 세션이 살아있으면 화면 깜빡임만 있음)
+   ============================================================ */
+function login(silent) {
+  if (CONFIG.CLIENT_ID.startsWith('YOUR_')) { showLoginError('CONFIG.CLIENT_ID 가 설정되지 않았습니다. index.html 상단의 CONFIG를 채워 주세요.'); return; }
+  const params = new URLSearchParams({
+    client_id: CONFIG.CLIENT_ID,
+    redirect_uri: redirectUri(),
+    response_type: 'token',
+    scope: CONFIG.SCOPES + ' openid email profile',
+    include_granted_scopes: 'true',
+    state: makeOAuthState()
+  });
+  if (silent) params.set('prompt', 'none'); else params.set('prompt', 'select_account');
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+}
+function showLoginError(msg) { const e = $('login-error'); e.style.display = 'block'; e.innerHTML = '⚠ ' + escapeHtml(msg); }
+
+// URL 해시에서 토큰 회수
+function handleAuthRedirect() {
+  if (!location.hash || location.hash.length < 2) return false;
+  const h = new URLSearchParams(location.hash.substring(1));
+  if (h.get('error')) {
+    history.replaceState(null, '', location.pathname + location.search);
+    if (h.get('error') === 'login_required' || h.get('error') === 'interaction_required' || h.get('error') === 'consent_required') {
+      // 조용한 재로그인 실패 → 로그인 버튼 화면으로
+      clearToken(); return false;
+    }
+    showLoginError('로그인 오류: ' + h.get('error') + (h.get('error_description') ? ' — ' + h.get('error_description') : ''));
+    clearToken(); return false;
+  }
+  if (h.get('state') !== sessionStorage.getItem('eg_oauth_state')) { history.replaceState(null, '', location.pathname); showLoginError('로그인 요청을 확인할 수 없습니다. 다시 로그인해 주세요.'); return false; }
+  sessionStorage.removeItem('eg_oauth_state');
+  const token = h.get('access_token');
+  if (!token) return false;
+  const expiresIn = parseInt(h.get('expires_in') || '3600', 10);
+  localStorage.setItem(LS.TOKEN, token);
+  localStorage.setItem(LS.TOKEN_EXP, String(Date.now() + (expiresIn - 60) * 1000));
+  localStorage.setItem(LS.LOGGED_BEFORE, '1');
+  history.replaceState(null, '', location.pathname + location.search);
+  return true;
+}
+function loadToken() {
+  const t = localStorage.getItem(LS.TOKEN), exp = parseInt(localStorage.getItem(LS.TOKEN_EXP) || '0', 10);
+  if (t && Date.now() < exp) { state.token = t; return true; }
+  return false;
+}
+function clearToken() { localStorage.removeItem(LS.TOKEN); localStorage.removeItem(LS.TOKEN_EXP); state.token = null; }
+function logout() {
+  if (!confirm('로그아웃할까요? (스프레드시트 연결과 설정은 이 브라우저에 유지됩니다)')) return;
+  clearToken(); localStorage.removeItem(LS.USER); localStorage.removeItem(LS.LOGGED_BEFORE);
+  location.reload();
+}
+
+// 인증 fetch — 401이면 조용한 재로그인
+async function authFetch(url, options) {
+  options = options || {};
+  options.headers = Object.assign({}, options.headers || {}, { Authorization: 'Bearer ' + state.token });
+  const res = await fetch(url, options);
+  if (res.status === 401) { clearToken(); login(true); throw new Error('로그인이 만료되어 다시 로그인합니다'); }
+  return res;
+}
+async function fetchUserInfo() {
+  try {
+    const res = await authFetch('https://www.googleapis.com/oauth2/v3/userinfo');
+    if (!res.ok) return;
+    const u = await res.json();
+    state.user = { email: u.email, name: u.name };
+    localStorage.setItem(LS.USER, JSON.stringify(state.user));
+  } catch (e) { /* 무시 */ }
+}
+
+/* ============================================================
+   Google Picker (기존 시트 선택)
+   ============================================================ */
+function onGapiLoaded() {
+  state.gapiReady = true;
+  gapi.load('picker', () => { state.pickerReady = true; });
+}
+function pickExistingSheet() {
+  if (!state.pickerReady) { showToast('선택 창을 준비하는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
+  if (!getPickerKey()) { showSheetConnectionOptions(); return; }
+  const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS).setIncludeFolders(false).setMode(google.picker.DocsViewMode.LIST);
+  const picker = new google.picker.PickerBuilder()
+    .setAppId(CONFIG.APP_ID)
+    .setOAuthToken(state.token)
+    .setDeveloperKey(getPickerKey())
+    .addView(view)
+    .setTitle('채점 시스템 스프레드시트 선택')
+    .setLocale('ko')
+    .setCallback(async data => {
+      if (data.action !== google.picker.Action.PICKED) return;
+      const doc = data.docs && data.docs[0]; if (!doc) return;
+      $('connect-status').innerHTML = '<span class="spinner"></span>시트 구조를 확인하는 중...';
+      try {
+        state.sheetId = doc.id; localStorage.setItem(LS.SHEET_ID, doc.id);
+        await checkAndMigrateSheet(false);
+        showToast('스프레드시트를 연결했습니다');
+        showApp();
+      } catch (e) {
+        $('connect-status').innerHTML = '⚠ ' + escapeHtml(e.message);
+        localStorage.removeItem(LS.SHEET_ID); state.sheetId = null;
+      }
+    })
+    .build();
+  picker.setVisible(true);
+}
+
+/* ============================================================
+   Sheets API — 생성 / 구조 점검·보완
+   ============================================================ */
+function headerRow(spec) {
+  return {
+    values: spec.headers.map(h => ({
+      userEnteredValue: { stringValue: h },
+      userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: spec.bg.r, green: spec.bg.g, blue: spec.bg.b } }
+    }))
+  };
+}
+async function createNewSheet() {
+  $('connect-status').innerHTML = '<span class="spinner"></span>새 스프레드시트를 만드는 중...';
+  try {
+    const body = {
+      properties: { title: CONFIG.SHEET_TITLE, locale: 'ko_KR', timeZone: 'Asia/Seoul' },
+      sheets: SHEET_SPECS.map((spec, i) => ({
+        properties: { title: spec.name, index: i, gridProperties: { frozenRowCount: 1, rowCount: 200, columnCount: Math.max(spec.headers.length, 8) } },
+        data: [{ startRow: 0, startColumn: 0, rowData: [headerRow(spec)] }]
+      }))
+    };
+    const res = await authFetch('https://sheets.googleapis.com/v4/spreadsheets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error('시트 생성 실패 (' + res.status + '): ' + (await res.text()).slice(0, 200));
+    const ss = await res.json();
+    state.sheetId = ss.spreadsheetId; localStorage.setItem(LS.SHEET_ID, ss.spreadsheetId);
+    showToast('새 스프레드시트를 만들었습니다');
+    showApp();
+  } catch (e) { $('connect-status').innerHTML = '⚠ ' + escapeHtml(e.message); }
+}
+
+// 연결된 시트에 탭/헤더가 부족하면 보완 (Apps Script의 migrateSheet_와 같은 역할)
+async function checkAndMigrateSheet(verbose) {
+  if (!state.sheetId) return;
+  const meta = await getSpreadsheetMeta();
+  const existing = {}; (meta.sheets || []).forEach(s => { existing[s.properties.title] = s.properties; });
+
+  const requests = []; const addedTabs = []; const fixedHeaders = [];
+  // 1) 없는 탭 추가
+  SHEET_SPECS.forEach(spec => {
+    if (!existing[spec.name]) {
+      requests.push({ addSheet: { properties: { title: spec.name, gridProperties: { frozenRowCount: 1, rowCount: 200, columnCount: Math.max(spec.headers.length, 8) } } } });
+      addedTabs.push(spec.name);
+    }
+  });
+  SHEET_SPECS.forEach(spec => { const p = existing[spec.name]; if (p && p.gridProperties && p.gridProperties.columnCount < spec.headers.length) requests.push({appendDimension:{sheetId:p.sheetId,dimension:'COLUMNS',length:spec.headers.length-p.gridProperties.columnCount}}); });
+  if (requests.length) {
+    const r = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}:batchUpdate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requests })
+    });
+    if (!r.ok) throw new Error('탭 추가 실패 (' + r.status + ')');
+    await getSpreadsheetMeta();  // 새 탭 sheetId 반영
+  }
+  // 2) 각 탭 1행 헤더 점검 → 부족하면 뒤에 추가 (기존 열 순서는 건드리지 않음)
+  const ranges = SHEET_SPECS.map(s => `'${s.name}'!1:1`);
+  const vr = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}/values:batchGet?` + ranges.map(r => 'ranges=' + encodeURIComponent(r)).join('&'));
+  if (!vr.ok) throw new Error('헤더 읽기 실패 (' + vr.status + ')');
+  const got = await vr.json();
+  const updates = [];
+  SHEET_SPECS.forEach((spec, i) => {
+    const row = (got.valueRanges && got.valueRanges[i] && got.valueRanges[i].values && got.valueRanges[i].values[0]) || [];
+    if (row.length < spec.headers.length) {
+      const missing = spec.headers.slice(row.length);
+      const startCol = colLetter(row.length + 1);
+      updates.push({ range: `'${spec.name}'!${startCol}1`, values: [missing] });
+      fixedHeaders.push(spec.name + ' (+' + missing.length + '열)');
+    }
+  });
+  if (updates.length) {
+    const ur = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}/values:batchUpdate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ valueInputOption: 'RAW', data: updates })
+    });
+    if (!ur.ok) throw new Error('헤더 보완 실패 (' + ur.status + ')');
+  }
+  if (verbose) {
+    if (!addedTabs.length && !fixedHeaders.length) showToast('시트 구조가 최신입니다. 보완할 것이 없습니다.');
+    else showToast('보완 완료 — 탭 추가: ' + (addedTabs.join(', ') || '없음') + ' / 열 보완: ' + (fixedHeaders.join(', ') || '없음'));
+  }
+  return { addedTabs, fixedHeaders, title: meta.properties && meta.properties.title };
+}
+function colLetter(n) { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+async function getSpreadsheetMeta() {
+  const r = await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${state.sheetId}?fields=spreadsheetId,properties.title,sheets.properties(title,sheetId,index,gridProperties)`);
+  if (r.status === 404 || r.status === 403) throw new Error('연결된 스프레드시트에 접근할 수 없습니다. 삭제되었거나 권한이 없습니다. "다른 시트 연결"을 눌러 다시 고르세요.');
+  if (!r.ok) throw new Error('시트 정보 조회 실패 (' + r.status + ')');
+  const meta = await r.json();
+  state.sheetIds = {}; (meta.sheets || []).forEach(s => { state.sheetIds[s.properties.title] = s.properties.sheetId; });
+  return meta;
+}
+function disconnectSheet() {
+  if (!confirm('이 브라우저에서 스프레드시트 연결을 해제할까요? (시트 자체는 삭제되지 않습니다)')) return;
+  localStorage.removeItem(LS.SHEET_ID); state.sheetId = null; showConnect();
+}
+
+/* ============================================================
+   설정 — Gemini API 키 / 모델 / 속도
+   ============================================================ */
+function getGeminiKey() { return localStorage.getItem(LS.GEMINI_KEY) || ''; }
+function getModel() { const m = localStorage.getItem(LS.MODEL); return MODELS.some(x => x.id === m) ? m : MODELS[0].id; }
+function getSpeed() { const s = localStorage.getItem(LS.SPEED); return SPEEDS.some(x => x.id === s) ? s : 'slow'; }
+
+function renderApiKeyStatus() {
+  const k = getGeminiKey(); const el = $('api-key-status'); const ind = $('api-status-indicator');
+  if (k) {
+    el.innerHTML = '<span class="badge badge-green">● 저장됨</span> <span class="helper" style="display:inline;">현재 키: ' + escapeHtml(k.slice(0, 8)) + '…</span>';
+    ind.textContent = 'AI 연결됨'; ind.className = 'badge badge-green';
+  } else {
+    el.innerHTML = '<span class="badge badge-red">● 미설정</span> <span class="helper" style="display:inline;">API 키를 입력해야 AI 채점이 가능합니다</span>';
+    ind.textContent = 'API 키 없음'; ind.className = 'badge badge-red';
+  }
+}
+async function saveApiKey() {
+  const k = $('api-key-input').value.trim();
+  if (!k || k.length < 20) { showToast('API 키 형식이 올바르지 않습니다'); return; }
+  showToast('키를 확인하는 중...');
+  try {
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?key=' + encodeURIComponent(k));
+    if (!r.ok) { showToast('키 확인 실패 (' + r.status + '). 키를 다시 확인해 주세요.'); return; }
+    localStorage.setItem(LS.GEMINI_KEY, k); $('api-key-input').value = '';
+    renderApiKeyStatus(); showToast('API 키를 저장했습니다');
+  } catch (e) { showToast('키 확인 중 오류: ' + e.message); }
+}
+function deleteApiKey() {
+  if (!confirm('저장된 API 키를 삭제할까요?')) return;
+  localStorage.removeItem(LS.GEMINI_KEY); renderApiKeyStatus(); showToast('API 키를 삭제했습니다');
+}
+function renderModelSelect() {
+  const cur = getModel();
+  $('model-select-area').innerHTML = MODELS.map(m => `
+    <label class="model-option ${m.id === cur ? 'selected' : ''}">
+      <input type="radio" name="ai-model" value="${m.id}" ${m.id === cur ? 'checked' : ''} onchange="selectModel('${m.id}')">
+      <div><strong>${escapeHtml(m.name)}</strong><div class="desc">${escapeHtml(m.desc)}</div></div>
+    </label>`).join('');
+}
+function selectModel(id) { localStorage.setItem(LS.MODEL, id); renderModelSelect(); showToast('AI 모델을 변경했습니다'); }
+function renderSpeedSelect() {
+  const cur = getSpeed();
+  $('speed-select-area').innerHTML = SPEEDS.map(s => `
+    <label class="model-option ${s.id === cur ? 'selected' : ''}">
+      <input type="radio" name="speed" value="${s.id}" ${s.id === cur ? 'checked' : ''} onchange="selectSpeed('${s.id}')">
+      <div><strong>${escapeHtml(s.name)}</strong><div class="desc">${escapeHtml(s.desc)}</div></div>
+    </label>`).join('');
+}
+function selectSpeed(id) { localStorage.setItem(LS.SPEED, id); renderSpeedSelect(); showToast('기본 채점 속도를 저장했습니다'); }
+
+async function renderSheetInfo() {
+  const el = $('sheet-info');
+  try {
+    const meta = await getSpreadsheetMeta();
+    const tabs = (meta.sheets || []).map(s => s.properties.title);
+    const missing = SHEET_SPECS.filter(s => !tabs.includes(s.name)).map(s => s.name);
+    el.innerHTML = `<strong>${escapeHtml(meta.properties.title)}</strong><br>탭 ${tabs.length}개` +
+      (missing.length ? ` · <span class="badge badge-amber">누락 탭 ${missing.length}개 — "구조 점검·보완"을 눌러 주세요</span>` : ' · <span class="badge badge-green">구조 정상</span>');
+    $('open-sheet-btn').href = 'https://docs.google.com/spreadsheets/d/' + state.sheetId;
+  } catch (e) { el.innerHTML = '⚠ ' + escapeHtml(e.message); }
+}
+async function runDiagnostics() {
+  const out = $('diagnostics-result'); out.style.display = 'block'; out.textContent = '진단 중...';
+  const lines = [];
+  lines.push('로그인: ' + (state.token ? 'OK (' + (state.user ? state.user.email : '사용자 정보 없음') + ')' : '토큰 없음'));
+  lines.push('토큰 만료까지: ' + Math.max(0, Math.round((parseInt(localStorage.getItem(LS.TOKEN_EXP) || '0', 10) - Date.now()) / 60000)) + '분');
+  lines.push('스프레드시트 ID: ' + (state.sheetId || '미연결'));
+  try { const m = await getSpreadsheetMeta(); lines.push('시트 접근: OK — ' + m.properties.title + ' (탭 ' + (m.sheets || []).length + '개)'); }
+  catch (e) { lines.push('시트 접근: 실패 — ' + e.message); }
+  lines.push('Gemini API 키: ' + (getGeminiKey() ? '저장됨' : '없음'));
+  lines.push('AI 모델: ' + getModel());
+  lines.push('채점 속도: ' + getSpeed());
+  lines.push('Picker 준비: ' + (state.pickerReady ? 'OK' : '로딩 중/실패'));
+  lines.push('리디렉션 URI: ' + redirectUri());
+  out.textContent = lines.join('\n');
+}
+
+/* ============================================================
+   화면 전환
+   ============================================================ */
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  if (name === 'settings') { renderApiKeyStatus(); renderModelSelect(); renderSpeedSelect(); renderSheetInfo(); }
+  if (name === 'rubric') renderRubricEvalSelect();
+  if (name === 'students') loadStudentClasses();
+  if (name === 'grading') prepareGradingTab();
+}
+function showLogin() { $('login-screen').style.display = 'block'; $('connect-screen').style.display = 'none'; $('app-screen').style.display = 'none'; }
+function showConnect() { $('login-screen').style.display = 'none'; $('connect-screen').style.display = 'block'; $('app-screen').style.display = 'none'; $('connect-status').innerHTML = ''; }
+function showApp() {
+  $('login-screen').style.display = 'none'; $('connect-screen').style.display = 'none'; $('app-screen').style.display = 'block';
+  renderApiKeyStatus();
+  switchTab('evaluations');
+  loadEvaluations();
+}
+function renderUserChip() {
+  const c = $('user-chip');
+  if (state.user) { c.style.display = 'inline-block'; c.textContent = state.user.email; }
+  $('logout-btn').style.display = 'inline-flex';
+}
+
+
+/* ============================================================
+   2단계 — Sheets 데이터 계층 (행 읽기/추가/수정/삭제)
+   ============================================================ */
+const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets/';
+function rangeOf(name, a1) { return encodeURIComponent("'" + name + "'!" + a1); }
+async function readSheet(name) {
+  const r = await authFetch(SHEETS_API + state.sheetId + '/values/' + rangeOf(name, 'A1:Z') + '?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING');
+  if (!r.ok) throw new Error(name + ' 읽기 실패 (' + r.status + ')');
+  const j = await r.json(); return j.values || [];
+}
+async function appendRows(name, rows) {
+  if (!rows.length) return;
+  const r = await authFetch(SHEETS_API + state.sheetId + '/values/' + rangeOf(name, 'A1') + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values: rows })
+  });
+  if (!r.ok) throw new Error(name + ' 저장 실패 (' + r.status + '): ' + (await r.text()).slice(0, 160));
+}
+async function updateRange(name, a1, values) {
+  const r = await authFetch(SHEETS_API + state.sheetId + '/values/' + rangeOf(name, a1) + '?valueInputOption=RAW', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values })
+  });
+  if (!r.ok) throw new Error(name + ' 수정 실패 (' + r.status + ')');
+}
+// 조건에 맞는 데이터 행 삭제 (헤더 제외). predicate(row) → true 면 삭제
+async function deleteRowsWhere(name, predicate) {
+  const values = await readSheet(name);
+  const idx = [];
+  for (let i = 1; i < values.length; i++) { if (predicate(values[i] || [])) idx.push(i); }
+  if (!idx.length) return 0;
+  let sheetId = state.sheetIds[name];
+  if (sheetId === undefined) { await getSpreadsheetMeta(); sheetId = state.sheetIds[name]; }
+  if (sheetId === undefined) throw new Error(name + ' 탭을 찾을 수 없습니다');
+  idx.sort((a, b) => b - a);  // 아래부터 지워야 인덱스가 밀리지 않음
+  const requests = idx.map(i => ({ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: i, endIndex: i + 1 } } }));
+  const r = await authFetch(SHEETS_API + state.sheetId + ':batchUpdate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requests })
+  });
+  if (!r.ok) throw new Error(name + ' 행 삭제 실패 (' + r.status + ')');
+  return idx.length;
+}
+function nowStr() { const d = new Date(), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
+function colIdx(header, name, fallback) { const i = (header || []).indexOf(name); return i >= 0 ? i : fallback; }
+function isTrue(v) { return v === true || v === 'TRUE' || v === 'true' || v === 1; }
+function escapeJs(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n'); }
+
+/* ============================================================
+   2단계 — Gemini 호출 (JSON 응답) — Apps Script callGeminiJSON_ 이식
+   ============================================================ */
+function extractResponseText(candidate) {
+  const parts = (candidate && candidate.content && candidate.content.parts) || [];
+  return parts.filter(p => p.text && p.thought !== true).map(p => p.text).join('');
+}
+async function callGeminiJSON(prompt, opts) {
+  opts = opts || {};
+  const key = getGeminiKey();
+  if (!key) return { success: false, message: 'Gemini API 키가 없습니다. 설정 탭에서 키를 저장해 주세요.' };
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + getModel() + ':generateContent?key=' + encodeURIComponent(key);
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { thinkingConfig: { thinkingLevel: opts.thinking || 'medium' }, maxOutputTokens: opts.maxTokens || 8192, responseMimeType: 'application/json' }
+  };
+  try {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (res.status === 429) return { success: false, message: 'API 호출 한도를 초과했습니다 (429). 잠시 후 다시 시도하거나 Flash-Lite 모델로 바꿔 보세요.' };
+    if (res.status === 503) return { success: false, message: 'AI 서버가 일시적으로 응답하지 않습니다. 1~2분 후 다시 시도해 주세요.' };
+    if (!res.ok) { let t = ''; try { t = (await res.json()).error.message; } catch (e) {} return { success: false, message: 'AI 호출 오류 (' + res.status + ')' + (t ? ': ' + t.slice(0, 160) : '') }; }
+    const result = await res.json();
+    const cand = result.candidates && result.candidates[0];
+    if (!cand) return { success: false, message: 'AI 응답이 비어 있습니다' + (result.promptFeedback ? ' (' + JSON.stringify(result.promptFeedback).slice(0, 120) + ')' : '') };
+    if (cand.finishReason === 'MAX_TOKENS') return { success: false, message: 'AI 응답이 길어서 잘렸습니다. 기준 수를 줄이거나 다시 시도해 주세요.' };
+    const raw = extractResponseText(cand);
+    if (!raw) return { success: false, message: 'AI 응답 내용이 비어 있습니다' };
+    let parsed; try { parsed = JSON.parse(raw); } catch (e) { return { success: false, message: 'AI 응답 형식 오류 (다시 시도해 주세요)' }; }
+    return { success: true, data: parsed };
+  } catch (e) { return { success: false, message: '통신 오류: ' + e.message }; }
+}
+
+/* ============================================================
+   2단계 — 평가 데이터 (평가목록 · 문항목록)
+   ============================================================ */
+// 평가목록 열 순서 (Apps Script v12와 동일)
+// 0 평가ID 1 과목 2 학년 3 단원 4 평가명 5 문항내용 6 척도단계 7 AI사용여부 8 생성일 9 수정일 10 평가유형 11 문항수 12 학생당페이지수 13 등급판정방식 14 모범답안 15 핵심요소
+function parseEvaluationRow(row) {
+  const evalType = String(row[10] || '단일문항');
+  return {
+    id: String(row[0]), subject: String(row[1] || ''), grade: Number(row[2]) || 0, unit: String(row[3] || ''), name: String(row[4] || ''),
+    question: String(row[5] || ''), scaleType: String(row[6] || '3단계'), useAI: isTrue(row[7]),
+    createdAt: String(row[8] || ''), updatedAt: String(row[9] || ''),
+    evalType, questionCount: Number(row[11]) || 1, pagesPerStudent: Number(row[12]) || 1, gradingMethod: String(row[13] || '총점비율'),
+    isMultiQuestion: evalType === '다중문항', modelAnswer: String(row[14] || ''), keyElements: String(row[15] || '')
+  };
+}
+async function getAllEvaluations() {
+  const values = await readSheet('평가목록');
+  const list = [];
+  for (let i = 1; i < values.length; i++) { const row = values[i]; if (row && row[0]) list.push(parseEvaluationRow(row)); }
+  return list;
+}
+function findEvaluation(id) { return state.evaluations.find(e => e.id === id) || null; }
+
+// 문항 레이블 "1-2" → {group:1, sub:2}, "3" → {group:3, sub:0}
+function parseLabel(label) {
+  const m = String(label || '').trim().match(/^(\d+)(?:-(\d+))?$/);
+  if (!m) return null;
+  return { group: parseInt(m[1], 10), sub: m[2] ? parseInt(m[2], 10) : 0 };
+}
+function makeLabel(q) { return q.sub ? q.group + '-' + q.sub : String(q.group); }
+
+// 문항목록 읽기 (표시번호·페이지·답란위치힌트는 헤더로 찾음 — 구버전 시트 호환)
+async function getQuestionsForEvaluation(evaluationId) {
+  const values = await readSheet('문항목록');
+  if (values.length < 2) return [];
+  const h = values[0];
+  const cLabel = colIdx(h, '표시번호', 5), cPage = colIdx(h, '페이지', 6), cHint = colIdx(h, '답란위치힌트', 7);
+  const qs = [];
+  for (let i = 1; i < values.length; i++) {
+    const r = values[i]; if (!r || r[0] !== evaluationId) continue;
+    const number = Number(r[1]) || 1;
+    const lab = parseLabel(r[cLabel]) || { group: number, sub: 0 };
+    qs.push({ number, group: lab.group, sub: lab.sub, label: makeLabel(lab), content: String(r[2] || ''), modelAnswer: String(r[3] || ''), keyElements: String(r[4] || ''),
+      page: Number(r[cPage]) || 1, hint: String(r[cHint] || '') });
+  }
+  qs.sort((a, b) => a.number - b.number);
+  return qs;
+}
+async function saveQuestionsForEvaluation(evaluationId, questions) {
+  await deleteRowsWhere('문항목록', r => r[0] === evaluationId);
+  const rows = questions.filter(q => q && String(q.content || '').trim()).map((q, i) => [
+    evaluationId, Number(q.number) || (i + 1), String(q.content), String(q.modelAnswer || ''), String(q.keyElements || ''),
+    makeLabel(q), Number(q.page) || 1, String(q.hint || '')
+  ]);
+  await appendRows('문항목록', rows);
+}
+// 단일/다중 공통: 채점·루브릭에서 쓰는 문항 배열 (단일 문항은 평가목록의 내용 + 문항목록의 페이지/힌트)
+async function getQuestionList(ev) {
+  const stored = await getQuestionsForEvaluation(ev.id);
+  if (ev.isMultiQuestion) return stored;
+  const s = stored[0] || {};
+  return [{ number: 1, group: 1, sub: 0, label: '1', content: ev.question, modelAnswer: ev.modelAnswer, keyElements: ev.keyElements, page: s.page || 1, hint: s.hint || '' }];
+}
+
+function evaluationRowValues(data, createdAt) {
+  const isMulti = data.evalType === '다중문항';
+  return [
+    data.subject, data.grade, data.unit, data.name,
+    isMulti ? '' : (data.question || ''), data.scaleType, !!data.useAI,
+    createdAt, nowStr(),
+    data.evalType, Number(data.questionCount) || 1, Number(data.pagesPerStudent) || 1, data.gradingMethod || '총점비율',
+    isMulti ? '' : (data.modelAnswer || ''), isMulti ? '' : (data.keyElements || '')
+  ];
+}
+async function createEvaluation(data) {
+  const id = 'EV_' + Date.now();
+  await appendRows('평가목록', [[id].concat(evaluationRowValues(data, nowStr()))]);
+  await saveQuestionsForEvaluation(id, data.questions || []);
+  return id;
+}
+async function updateEvaluation(id, data) {
+  const values = await readSheet('평가목록');
+  let rowIdx = -1; for (let i = 1; i < values.length; i++) { if (values[i] && values[i][0] === id) { rowIdx = i; break; } }
+  if (rowIdx < 0) throw new Error('평가를 찾을 수 없습니다');
+  const created = (values[rowIdx][8]) || nowStr();
+  await updateRange('평가목록', 'B' + (rowIdx + 1) + ':P' + (rowIdx + 1), [evaluationRowValues(data, created)]);
+  await saveQuestionsForEvaluation(id, data.questions || []);
+}
+async function deleteEvaluationData(id) {
+  for (const name of ['평가목록', '문항목록', '루브릭', '채점결과', 'AI원본', '학생페이지매핑', '채점기준샘플']) {
+    try { await deleteRowsWhere(name, r => r[0] === id); } catch (e) { console.warn(name, e); }
+  }
+}
+
+/* ============================================================
+   2단계 — 평가 관리 화면
+   ============================================================ */
+async function loadEvaluations() {
+  const c = $('evaluation-list'); if (c) c.innerHTML = '<p class="loading"><span class="spinner"></span>불러오는 중...</p>';
+  try { state.evaluations = await getAllEvaluations(); renderEvaluationList(); renderRubricEvalSelect(); }
+  catch (e) { if (c) c.innerHTML = '<div class="card"><p class="empty-state">불러오기 실패: ' + escapeHtml(e.message) + '<br><button class="btn btn-secondary btn-small" style="margin-top:8px;" onclick="loadEvaluations()">다시 시도</button></p></div>'; }
+}
+function renderEvaluationList() {
+  const c = $('evaluation-list'); if (!c) return;
+  if (!state.evaluations.length) {
+    c.innerHTML = '<div class="card"><div class="empty-state"><div class="ei">📝</div><h3 style="margin-bottom:6px;">아직 만들어진 평가가 없습니다</h3><p style="margin-bottom:14px;">+ 새 평가 만들기 버튼을 눌러 시작하세요.</p><button class="btn btn-primary" onclick="showEvaluationForm()">+ 새 평가 만들기</button></div></div>';
+    return;
+  }
+  c.innerHTML = state.evaluations.slice().reverse().map(ev => `
+    <div class="eval-card">
+      <div class="card-title">${escapeHtml(ev.name)}</div>
+      <div class="card-meta">
+        <span class="badge badge-blue">${escapeHtml(ev.subject)}</span>
+        <span class="badge badge-orange">${ev.grade}학년</span>
+        <span class="badge badge-green">${escapeHtml(ev.scaleType)}</span>
+        ${ev.useAI ? '<span class="badge badge-purple">AI 채점</span>' : ''}
+        ${ev.isMultiQuestion ? `<span class="badge badge-multi">📝 다중 문항 ${ev.questionCount}개 · 학생당 ${ev.pagesPerStudent}쪽</span>` : '<span class="badge badge-amber">단일 문항</span>'}
+        ${(!ev.isMultiQuestion && (ev.modelAnswer || ev.keyElements)) ? '<span class="badge badge-green">모범답안 있음</span>' : ''}
+      </div>
+      <div style="font-size:12px; color:var(--muted); margin-top:6px;">${escapeHtml(ev.unit || '')}${ev.updatedAt ? ' · 수정 ' + escapeHtml(String(ev.updatedAt).slice(0, 16)) : ''}</div>
+      ${!ev.isMultiQuestion && ev.question ? `<div style="font-size:13px; color:var(--text-sub); margin-top:8px; white-space:pre-wrap;">${escapeHtml(ev.question.length > 160 ? ev.question.slice(0, 160) + '…' : ev.question)}</div>` : ''}
+      <div class="card-actions">
+        <button class="btn btn-secondary btn-small" onclick="openRubricEditor('${ev.id}')">📋 루브릭 설정</button>
+        <button class="btn btn-ghost btn-small" onclick="showEvaluationForm('${ev.id}')">✏️ 수정</button>
+        <button class="btn btn-ghost btn-small" onclick="duplicateEvaluation('${ev.id}')">📄 복제</button>
+        <button class="btn btn-danger btn-small" onclick="confirmDeleteEvaluation('${ev.id}')">삭제</button>
+      </div>
+    </div>`).join('');
+}
+
+function showModal(html) { $('modal-box').innerHTML = html; $('modal-overlay').classList.add('show'); window.scrollTo({ top: 0 }); }
+function closeModal() { $('modal-overlay').classList.remove('show'); $('modal-box').innerHTML = ''; }
+
+async function showEvaluationForm(evaluationId) {
+  const ev = evaluationId ? findEvaluation(evaluationId) : null;
+  let questions = [];
+  if (ev) {
+    showToast('문항 정보를 불러오는 중...');
+    try { questions = await getQuestionsForEvaluation(ev.id); } catch (e) { showToast('문항 불러오기 실패: ' + e.message); return; }
+  }
+  renderEvaluationForm(ev, questions);
+}
+function renderEvaluationForm(ev, existingQuestions) {
+  const isEdit = !!ev;
+  const isMulti = ev ? ev.isMultiQuestion : false;
+  const singleStored = (!isMulti && existingQuestions && existingQuestions[0]) || {};
+  // 편집 중 문항 배열 초기화
+  if (isMulti && existingQuestions.length) state.formQuestions = existingQuestions.map(q => Object.assign({}, q));
+  else state.formQuestions = [newQuestion(1, 0, 1), newQuestion(2, 0, 1)];
+
+  const sel = (v, cur) => v === cur ? 'selected' : '';
+  const html = `
+    <div class="modal-header"><span class="modal-title">${isEdit ? '평가 수정' : '새 평가 만들기'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="form-row">
+      <label>평가 유형 *</label>
+      <div class="eval-type-selector">
+        <label class="eval-type-option ${!isMulti ? 'selected' : ''}"><input type="radio" name="eval-type" value="단일문항" ${!isMulti ? 'checked' : ''} onchange="onEvalTypeChange()"><div><strong>단일 문항</strong><span>답안 1장에 문항 1개 (간단한 형성평가·서술형 한 문제)</span></div></label>
+        <label class="eval-type-option ${isMulti ? 'selected' : ''}"><input type="radio" name="eval-type" value="다중문항" ${isMulti ? 'checked' : ''} onchange="onEvalTypeChange()"><div><strong>다중 문항</strong><span>여러 문항 · 소문항(1-1, 1-2) · 한 페이지에 여러 문항 가능 (단원평가)</span></div></label>
+      </div>
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row" style="margin:0;"><label>과목 *</label><input type="text" id="ev-subject" placeholder="예: 국어, 사회, 과학" value="${ev ? escapeHtml(ev.subject) : ''}"></div>
+      <div class="form-row" style="margin:0;"><label>학년 *</label><select id="ev-grade">${[1,2,3,4,5,6].map(g => `<option value="${g}" ${ev ? (ev.grade === g ? 'selected' : '') : (g === 4 ? 'selected' : '')}>${g}학년</option>`).join('')}</select></div>
+    </div>
+    <div class="form-row-inline">
+      <div class="form-row" style="margin:0;"><label>단원</label><input type="text" id="ev-unit" placeholder="예: 2. 우리 지역의 문화유산" value="${ev ? escapeHtml(ev.unit) : ''}"></div>
+      <div class="form-row" style="margin:0;"><label>척도 단계 *</label><select id="ev-scale-type"><option value="3단계" ${!ev || ev.scaleType === '3단계' ? 'selected' : ''}>3단계 (상/중/하)</option><option value="4단계" ${ev && ev.scaleType === '4단계' ? 'selected' : ''}>4단계 (매우잘함/잘함/보통/노력요함)</option></select></div>
+    </div>
+    <div class="form-row"><label>평가명 *</label><input type="text" id="ev-name" placeholder="예: 4학년 2학기 사회 2단원 서술형 평가" value="${ev ? escapeHtml(ev.name) : ''}"></div>
+
+    <!-- 단일 문항 -->
+    <div id="single-question-section" style="display:${isMulti ? 'none' : 'block'};">
+      <div class="form-row">
+        <label>평가 문항 *</label>
+        <textarea id="ev-question" rows="4" placeholder="학생에게 제시한 문제를 문제지에 인쇄된 그대로 입력하세요. (괄호 힌트까지 그대로 넣으면 AI가 '힌트 베끼기'를 구분합니다)">${ev && !isMulti ? escapeHtml(ev.question) : ''}</textarea>
+        <div class="helper">문항이 자세할수록 AI 채점이 정확해집니다.</div>
+      </div>
+      <div class="form-row-inline">
+        <div class="form-row" style="margin:0;"><label>학생당 답안 페이지 수</label><input type="number" id="ev-single-pages" min="1" max="10" value="${ev && !isMulti ? ev.pagesPerStudent : 1}"><div class="helper">보통 1. 답안이 앞뒤 2쪽이면 2.</div></div>
+        <div class="form-row" style="margin:0;"><label>답란 위치 힌트 (선택)</label><input type="text" id="ev-single-hint" placeholder="예: 문제 아래 네모 칸, 뒷면 전체" value="${escapeHtml(singleStored.hint || '')}"><div class="helper">문제가 인쇄된 답안지에서 학생 글씨를 찾을 위치를 AI에게 알려줍니다.</div></div>
+      </div>
+      <details class="reference-details" ${ev && !isMulti && (ev.modelAnswer || ev.keyElements) ? 'open' : ''}>
+        <summary>📝 채점 정확도 높이기: 모범답안·핵심요소 (선택이지만 강력 권장)</summary>
+        <div class="reference-inner">
+          <div class="form-row"><label>모범 답안</label><textarea id="ev-model-answer" rows="3" placeholder="우수한 답안 예시. AI가 기준점으로 삼되 표현이 다른 답안도 인정합니다.">${ev && !isMulti ? escapeHtml(ev.modelAnswer) : ''}</textarea></div>
+          <div class="form-row" style="margin:0;"><label>핵심 요소</label><textarea id="ev-key-elements" rows="3" placeholder="답안에 담겨야 할 요소를 줄바꿈으로 나열&#10;- 원인을 설명함&#10;- 결과를 설명함&#10;- 원인과 결과를 연결함">${ev && !isMulti ? escapeHtml(ev.keyElements) : ''}</textarea><div class="helper">단어 체크리스트가 아니라 "그 요소를 자기 말로 풀어 썼는지"를 AI가 판단합니다.</div></div>
+        </div>
+      </details>
+    </div>
+
+    <!-- 다중 문항 -->
+    <div id="multi-question-section" style="display:${isMulti ? 'block' : 'none'};">
+      <div class="form-row-inline">
+        <div class="form-row" style="margin:0;"><label>학생당 답안 페이지 수 *</label><input type="number" id="ev-pages" min="1" max="20" value="${ev && isMulti ? ev.pagesPerStudent : 2}" onchange="onPagesChange()"><div class="helper">한 학생의 시험지가 몇 쪽인지. 각 문항이 몇 쪽에 있는지는 아래에서 지정합니다.</div></div>
+        <div class="form-row" style="margin:0;"><label>종합 등급 판정 방식</label><select id="ev-grading-method"><option value="총점비율" ${!ev || ev.gradingMethod !== '문항분포' ? 'selected' : ''}>총점 비율 기반 (표준)</option><option value="문항분포" ${ev && ev.gradingMethod === '문항분포' ? 'selected' : ''}>문항별 등급 분포 기반</option></select><div class="helper">총점 비율: 총점÷만점 / 문항 분포: 각 문항 등급 개수로 판정</div></div>
+      </div>
+      <div class="form-row">
+        <label>문항 목록 *</label>
+        <div class="helper" style="margin-bottom:8px;">문제지에 인쇄된 그대로 입력하세요. <strong>소문항</strong>(1-1, 1-2…)은 각각 따로 채점되고 루브릭도 따로 정합니다. 같은 페이지에 여러 문항이 있어도 됩니다.</div>
+        <div id="questions-input-list"></div>
+        <div class="q-add-bar"><button type="button" class="btn btn-secondary btn-small" onclick="addFormQuestion()">+ 문항 추가</button></div>
+        <div id="page-summary" class="page-summary"></div>
+      </div>
+    </div>
+
+    <div class="form-row checkbox-row"><input type="checkbox" id="ev-use-ai" ${!ev || ev.useAI ? 'checked' : ''}><label for="ev-use-ai" style="margin:0;">AI 채점 사용</label></div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">취소</button><button class="btn btn-primary" id="ev-save-btn" onclick="saveEvaluation('${ev ? ev.id : ''}')">저장</button></div>`;
+  showModal(html);
+  if (isMulti) renderQuestionsInput();
+}
+function newQuestion(group, sub, page) { return { number: 0, group, sub, label: '', content: '', modelAnswer: '', keyElements: '', page: page || 1, hint: '' }; }
+function onEvalTypeChange() {
+  const isMulti = document.querySelector('input[name="eval-type"]:checked').value === '다중문항';
+  document.querySelectorAll('.eval-type-option').forEach(o => o.classList.toggle('selected', o.querySelector('input').checked));
+  $('single-question-section').style.display = isMulti ? 'none' : 'block';
+  $('multi-question-section').style.display = isMulti ? 'block' : 'none';
+  if (isMulti) renderQuestionsInput();
+}
+function formPages() { return Math.max(1, Math.min(20, parseInt(($('ev-pages') || {}).value, 10) || 1)); }
+function onPagesChange() { collectFormQuestions(); const p = formPages(); state.formQuestions.forEach(q => { if (q.page > p) q.page = p; }); renderQuestionsInput(); }
+
+// 번호 재부여: 묶음(group) 순서대로 1,2,3… / 소문항은 g-1, g-2… / 문항번호(채점용)는 전체 순번
+function renumberFormQuestions() {
+  let g = 0, lastGroup = null, sub = 0, n = 0;
+  state.formQuestions.forEach(q => {
+    if (q.group !== lastGroup) { g++; lastGroup = q.group; sub = 0; }
+    q._g = g;
+    if (q.sub) { sub++; q._s = sub; } else q._s = 0;
+  });
+  state.formQuestions.forEach(q => { q.group = q._g; q.sub = q._s; delete q._g; delete q._s; q.number = ++n; q.label = makeLabel(q); });
+}
+function collectFormQuestions() {
+  document.querySelectorAll('#questions-input-list .q-block').forEach(b => {
+    const i = parseInt(b.dataset.idx, 10); const q = state.formQuestions[i]; if (!q) return;
+    q.content = b.querySelector('.q-content').value; q.page = parseInt(b.querySelector('.q-page').value, 10) || 1;
+    q.hint = b.querySelector('.q-hint').value; q.modelAnswer = b.querySelector('.q-ma').value; q.keyElements = b.querySelector('.q-ke').value;
+  });
+}
+function renderQuestionsInput() {
+  const c = $('questions-input-list'); if (!c) return;
+  renumberFormQuestions();
+  const pages = formPages();
+  c.innerHTML = state.formQuestions.map((q, i) => {
+    const hasRef = q.modelAnswer || q.keyElements;
+    return `
+    <div class="q-block ${q.sub ? 'sub' : ''}" data-idx="${i}">
+      <div class="q-head">
+        <span class="q-label">문항 ${q.label}</span>
+        <select class="q-page" title="이 문항이 있는 페이지">${Array.from({ length: pages }, (_, k) => `<option value="${k+1}" ${q.page === k+1 ? 'selected' : ''}>${k+1}쪽</option>`).join('')}</select>
+        <input type="text" class="q-hint hint-input" placeholder="답란 위치 힌트 (예: 문제 아래 네모 칸 / 오른쪽 표 안)" value="${escapeHtml(q.hint)}">
+        <div class="q-tools">
+          <button type="button" onclick="moveFormQuestion(${i},-1)" title="위로">▲</button>
+          <button type="button" onclick="moveFormQuestion(${i},1)" title="아래로">▼</button>
+          <button type="button" onclick="addSubQuestion(${i})" title="이 문항 아래에 소문항 추가">+ 소문항</button>
+          <button type="button" onclick="removeFormQuestion(${i})" title="삭제" style="color:var(--red);">✕</button>
+        </div>
+      </div>
+      <textarea class="q-content" rows="3" placeholder="문항 ${q.label} 내용 (문제지에 인쇄된 그대로)">${escapeHtml(q.content)}</textarea>
+      <details class="reference-details" ${hasRef ? 'open' : ''}>
+        <summary>📝 모범답안·핵심요소 (선택 · 권장)</summary>
+        <div class="reference-inner">
+          <textarea class="q-ma" rows="2" placeholder="문항 ${q.label} 모범 답안">${escapeHtml(q.modelAnswer)}</textarea>
+          <textarea class="q-ke" rows="2" placeholder="문항 ${q.label} 핵심 요소 (줄바꿈으로 나열)">${escapeHtml(q.keyElements)}</textarea>
+        </div>
+      </details>
+    </div>`;
+  }).join('');
+  renderPageSummary();
+  c.querySelectorAll('.q-page').forEach(s => s.addEventListener('change', () => { collectFormQuestions(); renderPageSummary(); }));
+}
+function renderPageSummary() {
+  const el = $('page-summary'); if (!el) return;
+  const pages = formPages(); const byPage = {};
+  state.formQuestions.forEach(q => { (byPage[q.page] = byPage[q.page] || []).push(q.label); });
+  const parts = []; for (let p = 1; p <= pages; p++) parts.push(`${p}쪽: ${byPage[p] ? '문항 ' + byPage[p].join(', ') : '<span style="color:var(--red);">문항 없음</span>'}`);
+  el.innerHTML = '📄 페이지 배치 — ' + parts.join(' &nbsp;|&nbsp; ') + `<br>총 ${state.formQuestions.length}개 문항(소문항 포함)이 각각 채점됩니다.`;
+}
+function addFormQuestion() {
+  collectFormQuestions();
+  const last = state.formQuestions[state.formQuestions.length - 1];
+  const maxGroup = state.formQuestions.reduce((m, q) => Math.max(m, q.group), 0);
+  state.formQuestions.push(newQuestion(maxGroup + 1, 0, last ? last.page : 1));
+  renderQuestionsInput();
+}
+function addSubQuestion(i) {
+  collectFormQuestions();
+  const q = state.formQuestions[i]; if (!q) return;
+  // 소문항이 아니던 문항이면 그 문항을 g-1로 바꾸고 g-2를 추가 / 이미 소문항이면 같은 묶음 끝에 추가
+  if (!q.sub) { q.sub = 1; state.formQuestions.splice(i + 1, 0, Object.assign(newQuestion(q.group, 2, q.page), { hint: '' })); }
+  else {
+    let lastIdx = i; for (let k = i + 1; k < state.formQuestions.length; k++) { if (state.formQuestions[k].group === q.group) lastIdx = k; else break; }
+    state.formQuestions.splice(lastIdx + 1, 0, newQuestion(q.group, 99, state.formQuestions[lastIdx].page));
+  }
+  renderQuestionsInput();
+}
+function removeFormQuestion(i) {
+  collectFormQuestions();
+  const q = state.formQuestions[i]; if (!q) return;
+  if (q.content.trim() && !confirm(`문항 ${q.label}을(를) 삭제할까요?`)) return;
+  state.formQuestions.splice(i, 1);
+  // 묶음에 소문항이 하나만 남으면 일반 문항으로
+  const groups = {}; state.formQuestions.forEach(x => { groups[x.group] = (groups[x.group] || 0) + 1; });
+  state.formQuestions.forEach(x => { if (x.sub && groups[x.group] === 1) x.sub = 0; });
+  if (!state.formQuestions.length) state.formQuestions.push(newQuestion(1, 0, 1));
+  renderQuestionsInput();
+}
+function moveFormQuestion(i, dir) {
+  collectFormQuestions();
+  const j = i + dir; if (j < 0 || j >= state.formQuestions.length) return;
+  const a = state.formQuestions[i], b = state.formQuestions[j];
+  // 소문항은 같은 묶음 안에서만 이동, 일반 문항은 묶음 단위로 이동
+  if (a.group === b.group) {
+    state.formQuestions[i] = b; state.formQuestions[j] = a;
+  } else {
+    if (a.sub) { showToast('소문항은 같은 문항 묶음 안에서만 순서를 바꿀 수 있습니다'); return; }
+    const blockOf = g => { const s = state.formQuestions.findIndex(x => x.group === g); let e = s; while (e + 1 < state.formQuestions.length && state.formQuestions[e + 1].group === g) e++; return [s, e]; };
+    const [as, ae] = blockOf(a.group); const [bs, be] = blockOf(b.group);
+    const A = state.formQuestions.slice(as, ae + 1), B = state.formQuestions.slice(bs, be + 1);
+    if (dir < 0) state.formQuestions.splice(bs, A.length + B.length, ...A, ...B); else state.formQuestions.splice(as, A.length + B.length, ...B, ...A);
+  }
+  renderQuestionsInput();
+}
+
+async function saveEvaluation(id) {
+  const evalType = document.querySelector('input[name="eval-type"]:checked').value;
+  const isMulti = evalType === '다중문항';
+  const data = {
+    subject: $('ev-subject').value.trim(), grade: parseInt($('ev-grade').value, 10), unit: $('ev-unit').value.trim(), name: $('ev-name').value.trim(),
+    scaleType: $('ev-scale-type').value, useAI: $('ev-use-ai').checked, evalType
+  };
+  if (!data.subject || !data.grade || !data.name) { showToast('* 표시된 항목을 모두 입력해 주세요'); return; }
+  if (isMulti) {
+    collectFormQuestions(); renumberFormQuestions();
+    const missing = state.formQuestions.filter(q => !q.content.trim()).map(q => q.label);
+    if (missing.length) { showToast('문항 ' + missing.join(', ') + ' 내용을 입력해 주세요'); return; }
+    if (state.formQuestions.length < 1) { showToast('문항을 1개 이상 입력해 주세요'); return; }
+    data.questions = state.formQuestions.map(q => ({ number: q.number, group: q.group, sub: q.sub, content: q.content.trim(), modelAnswer: q.modelAnswer.trim(), keyElements: q.keyElements.trim(), page: q.page, hint: q.hint.trim() }));
+    data.questionCount = data.questions.length; data.pagesPerStudent = formPages(); data.gradingMethod = $('ev-grading-method').value; data.question = '';
+  } else {
+    data.question = $('ev-question').value.trim();
+    if (!data.question) { showToast('평가 문항을 입력해 주세요'); return; }
+    data.modelAnswer = $('ev-model-answer').value.trim(); data.keyElements = $('ev-key-elements').value.trim();
+    data.questionCount = 1; data.pagesPerStudent = Math.max(1, parseInt($('ev-single-pages').value, 10) || 1); data.gradingMethod = '총점비율';
+    // 단일 문항도 문항목록에 1행 저장 (페이지·답란 힌트 보관용 — Apps Script 버전은 이 행을 무시함)
+    data.questions = [{ number: 1, group: 1, sub: 0, content: data.question, modelAnswer: data.modelAnswer, keyElements: data.keyElements, page: 1, hint: $('ev-single-hint').value.trim() }];
+  }
+  const btn = $('ev-save-btn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>저장 중...';
+  try {
+    if (id) await updateEvaluation(id, data); else await createEvaluation(data);
+    closeModal(); showToast(id ? '평가를 수정했습니다' : '새 평가를 만들었습니다');
+    await loadEvaluations();
+    if (id && state.currentEvaluation && state.currentEvaluation.id === id) state.currentEvaluation = findEvaluation(id);
+  } catch (e) { showToast('저장 실패: ' + e.message); btn.disabled = false; btn.textContent = '저장'; }
+}
+async function confirmDeleteEvaluation(id) {
+  const ev = findEvaluation(id); if (!ev) return;
+  if (!confirm(`"${ev.name}" 평가를 삭제할까요?\n\n문항·루브릭·채점 결과·AI 원본·페이지 매핑·채점 기준 샘플이 모두 삭제됩니다. (되돌릴 수 없음)`)) return;
+  showToast('삭제하는 중...');
+  try { await deleteEvaluationData(id); if (state.currentEvaluation && state.currentEvaluation.id === id) { state.currentEvaluation = null; $('rubric-content').innerHTML = ''; } showToast('평가를 삭제했습니다'); await loadEvaluations(); }
+  catch (e) { showToast('삭제 실패: ' + e.message); }
+}
+async function duplicateEvaluation(id) {
+  const ev = findEvaluation(id); if (!ev) return;
+  const newName = prompt('복제할 평가의 새 이름을 입력하세요.\n(문항·모범답안·루브릭이 함께 복사되고, 채점 결과는 복사되지 않습니다)', ev.name + ' (복사본)');
+  if (!newName || !newName.trim()) return;
+  showToast('복제하는 중...');
+  try {
+    const questions = await getQuestionsForEvaluation(id);
+    const data = Object.assign({}, ev, { name: newName.trim(), questions });
+    const newId = await createEvaluation(data);
+    const rubric = await getRubricRows(id);
+    if (rubric.length) await appendRows('루브릭', rubric.map(r => [newId].concat(r.slice(1, 8))));
+    showToast('평가를 복제했습니다'); await loadEvaluations();
+  } catch (e) { showToast('복제 실패: ' + e.message); }
+}
+
+/* ============================================================
+   2단계 — 루브릭 데이터
+   ============================================================ */
+async function getRubricRows(evaluationId) {
+  const values = await readSheet('루브릭');
+  return values.slice(1).filter(r => r && r[0] === evaluationId);
+}
+// 문항번호별 { qNum: [ {number, name, scales:[{level,score,criterion,feedback}]} ] }
+async function getRubricGroupedByQuestion(evaluationId) {
+  const rows = await getRubricRows(evaluationId);
+  const map = {};
+  rows.forEach(r => {
+    const qNum = Number(r[1]) || 1, criNum = Number(r[2]) || 1;
+    const key = qNum + '_' + criNum;
+    if (!map[key]) map[key] = { qNum, number: criNum, name: String(r[3] || ''), scales: [] };
+    map[key].scales.push({ level: String(r[4] || ''), score: Number(r[5]) || 0, criterion: String(r[6] || ''), feedback: String(r[7] || '') });
+  });
+  const grouped = {};
+  Object.values(map).sort((a, b) => a.qNum - b.qNum || a.number - b.number).forEach(c => { (grouped[c.qNum] = grouped[c.qNum] || []).push({ number: c.number, name: c.name, scales: c.scales }); });
+  return grouped;
+}
+async function saveRubricForQuestion(evaluationId, qNum, rubric) {
+  await deleteRowsWhere('루브릭', r => r[0] === evaluationId && (Number(r[1]) || 1) === Number(qNum));
+  const rows = [];
+  rubric.forEach(c => c.scales.forEach(s => rows.push([evaluationId, Number(qNum), c.number, c.name, s.level, Number(s.score) || 0, s.criterion, s.feedback])));
+  await appendRows('루브릭', rows);
+}
+function defaultScales(scaleType) {
+  return scaleType === '3단계'
+    ? [{ level: '상', score: 3 }, { level: '중', score: 2 }, { level: '하', score: 1 }]
+    : [{ level: '매우잘함', score: 4 }, { level: '잘함', score: 3 }, { level: '보통', score: 2 }, { level: '노력요함', score: 1 }];
+}
+
+/* ============================================================
+   2단계 — 루브릭 편집 화면
+   ============================================================ */
+function renderRubricEvalSelect() {
+  const s = $('rubric-eval-select'); if (!s) return;
+  const cur = state.currentEvaluation ? state.currentEvaluation.id : '';
+  s.innerHTML = '<option value="">평가를 선택하세요</option>' + state.evaluations.slice().reverse().map(ev => `<option value="${ev.id}" ${ev.id === cur ? 'selected' : ''}>${escapeHtml(ev.name)} (${ev.grade}학년 ${escapeHtml(ev.subject)})</option>`).join('');
+}
+async function openRubricEditor(evaluationId) {
+  if (!evaluationId) return;
+  const ev = findEvaluation(evaluationId); if (!ev) return;
+  state.currentEvaluation = ev; state.rubricDraft = {}; state.currentQuestionIndex = 0;
+  switchTab('rubric');
+  $('rubric-content').innerHTML = '<p class="loading"><span class="spinner"></span>문항과 루브릭을 불러오는 중...</p>';
+  try {
+    const [questions, grouped] = await Promise.all([getQuestionList(ev), getRubricGroupedByQuestion(ev.id)]);
+    state.currentQuestions = questions; state.rubricsByQuestion = grouped;
+    renderRubricEditor();
+  } catch (e) { $('rubric-content').innerHTML = '<div class="card">⚠ ' + escapeHtml(e.message) + '</div>'; }
+}
+function rubricIsDirty(qNum) {
+  if (!state.rubricDraft[qNum]) return false;
+  return JSON.stringify(state.rubricDraft[qNum]) !== JSON.stringify(state.rubricsByQuestion[qNum] || []);
+}
+function renderRubricEditor() {
+  const ev = state.currentEvaluation, qs = state.currentQuestions;
+  const idx = Math.min(state.currentQuestionIndex, Math.max(0, qs.length - 1)); state.currentQuestionIndex = idx;
+  const q = qs[idx];
+  const c = $('rubric-content');
+  if (!q) { c.innerHTML = '<div class="card"><p class="empty-state">이 평가에는 문항이 없습니다. 평가 관리에서 수정해 문항을 추가하세요.</p></div>'; return; }
+  const rubric = state.rubricDraft[q.number] ? state.rubricDraft[q.number] : (state.rubricsByQuestion[q.number] || []).map(x => JSON.parse(JSON.stringify(x)));
+  state.currentRubric = rubric;
+  const doneCount = qs.filter(x => (state.rubricsByQuestion[x.number] || []).length).length;
+  const siblings = qs.filter(x => x.group === q.group && x.number !== q.number).map(x => x.label);
+  c.innerHTML = `
+    <div class="card" style="margin-bottom:12px;">
+      <div style="font-size:15px; font-weight:700; margin-bottom:6px;">${escapeHtml(ev.name)}</div>
+      <div class="card-meta"><span class="badge badge-blue">${escapeHtml(ev.subject)}</span><span class="badge badge-orange">${ev.grade}학년</span><span class="badge badge-green">${escapeHtml(ev.scaleType)}</span>
+        ${ev.isMultiQuestion ? `<span class="badge badge-multi">문항 ${qs.length}개 · 학생당 ${ev.pagesPerStudent}쪽</span>` : '<span class="badge badge-amber">단일 문항</span>'}
+        <span class="badge ${doneCount === qs.length ? 'badge-green' : 'badge-amber'}">루브릭 완성 ${doneCount}/${qs.length}</span></div>
+    </div>
+    ${qs.length > 1 ? `<div class="question-tabs">${qs.map((x, i) => `<button class="question-tab ${i === idx ? 'active' : ''} ${(state.rubricsByQuestion[x.number] || []).length ? 'done' : ''} ${rubricIsDirty(x.number) ? 'dirty' : ''}" onclick="selectQuestionTab(${i})">문항 ${x.label}${rubricIsDirty(x.number) ? ' ●' : ((state.rubricsByQuestion[x.number] || []).length ? ' ✓' : '')}</button>`).join('')}</div>` : ''}
+    <div class="q-context">
+      <div style="font-weight:700; color:var(--primary-dark); margin-bottom:4px;">문항 ${q.label}${ev.isMultiQuestion ? ` · ${q.page}쪽` : ''}${q.hint ? ` · 답란: ${escapeHtml(q.hint)}` : ''}</div>
+      <div style="white-space:pre-wrap;">${escapeHtml(q.content)}</div>
+      ${q.modelAnswer ? `<div class="meta">모범답안: ${escapeHtml(q.modelAnswer.length > 200 ? q.modelAnswer.slice(0, 200) + '…' : q.modelAnswer)}</div>` : ''}
+      ${q.keyElements ? `<div class="meta">핵심요소: ${escapeHtml(q.keyElements.replace(/\n/g, ' / '))}</div>` : ''}
+      ${siblings.length ? `<div class="meta">같은 묶음 소문항: ${siblings.join(', ')}</div>` : ''}
+      ${!q.modelAnswer && !q.keyElements ? '<div class="meta" style="color:var(--amber);">💡 모범답안·핵심요소가 없습니다. 평가 수정에서 넣으면 채점 일관성이 올라갑니다.</div>' : ''}
+    </div>
+    <div class="ai-collab-panel">
+      <div style="font-weight:600; font-size:14px;">교사–AI 협업으로 루브릭 만들기</div>
+      <div style="font-size:12px; color:var(--muted); margin-top:2px;">AI는 단어 맞추기가 아닌 <strong>의미·논리 중심</strong> 기준을 제안하도록 안내됩니다. 최종 결정은 선생님이 합니다.</div>
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-small" onclick="requestAIDraft()">🤖 AI에게 초안 받기</button>
+        <button class="btn btn-secondary btn-small" onclick="requestAIReview()">🔍 AI에게 검토 요청</button>
+      </div>
+    </div>
+    <div id="ai-feedback-area"></div>
+    <div id="criteria-list">${rubric.length ? '' : '<div class="card"><p class="empty-state">아직 채점 기준이 없습니다.<br>+ 기준 추가 또는 AI 초안 받기로 시작하세요.</p></div>'}</div>
+    <div class="rubric-actions" style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="addCriterion()">+ 기준 추가</button>
+      <button class="btn btn-primary" id="rubric-save-btn" onclick="saveCurrentRubric(false)">문항 ${q.label} 루브릭 저장</button>
+      ${idx < qs.length - 1 ? `<button class="btn btn-ghost" onclick="saveCurrentRubric(true)">저장 후 다음 문항 →</button>` : ''}
+    </div>`;
+  rubric.forEach(cr => renderCriterionEditor(cr));
+}
+function selectQuestionTab(i) {
+  const q = state.currentQuestions[state.currentQuestionIndex];
+  if (q) { const r = collectRubricFromUI(true); state.rubricDraft[q.number] = r; }
+  state.currentQuestionIndex = i; renderRubricEditor();
+}
+function renderCriterionEditor(criterion) {
+  const list = $('criteria-list'); const empty = list.querySelector('.empty-state'); if (empty) empty.closest('.card').remove();
+  const div = document.createElement('div'); div.className = 'criterion-editor'; div.dataset.number = criterion.number;
+  div.innerHTML = `
+    <div class="criterion-editor-header"><span style="font-weight:600;">기준 ${criterion.number}</span><button class="btn btn-danger btn-small" onclick="removeCriterion(${criterion.number})">기준 삭제</button></div>
+    <div class="form-row"><label>기준명</label><input type="text" class="cr-name" value="${escapeHtml(criterion.name)}" placeholder="예: 문화유산 보존의 이유를 자기 말로 설명"></div>
+    <div class="scale-grid-head"><div>척도</div><div>점수</div><div>판정 기준 (AI가 참고)</div><div>피드백 문구</div></div>
+    ${criterion.scales.map(s => `
+      <div class="scale-editor">
+        <input type="text" class="sc-level" value="${escapeHtml(s.level)}" readonly>
+        <input type="number" class="sc-score" value="${s.score}" min="0" max="10">
+        <textarea class="sc-criterion" placeholder="이 척도에 해당하는 답안의 의미적 특징">${escapeHtml(s.criterion || '')}</textarea>
+        <textarea class="sc-feedback" placeholder="이 척도를 받은 학생에게 줄 피드백">${escapeHtml(s.feedback || '')}</textarea>
+      </div>`).join('')}`;
+  list.appendChild(div);
+}
+function addCriterion() {
+  const ev = state.currentEvaluation;
+  const rubric = collectRubricFromUI(true);
+  rubric.push({ number: rubric.length + 1, name: '', scales: defaultScales(ev.scaleType).map(s => ({ level: s.level, score: s.score, criterion: '', feedback: '' })) });
+  const q = state.currentQuestions[state.currentQuestionIndex]; state.rubricDraft[q.number] = rubric; renderRubricEditor();
+}
+function removeCriterion(number) {
+  if (!confirm(`기준 ${number}을(를) 삭제할까요?`)) return;
+  let rubric = collectRubricFromUI(true).filter(c => c.number !== number);
+  rubric.forEach((c, i) => c.number = i + 1);
+  const q = state.currentQuestions[state.currentQuestionIndex]; state.rubricDraft[q.number] = rubric; renderRubricEditor();
+}
+// 화면 → 루브릭 배열. allowEmptyName=true 면 이름 없는 기준도 유지(임시 보관용)
+function collectRubricFromUI(allowEmptyName) {
+  const rubric = [];
+  document.querySelectorAll('#criteria-list .criterion-editor').forEach(ed => {
+    const name = ed.querySelector('.cr-name').value.trim();
+    if (!name && !allowEmptyName) return;
+    const scales = Array.from(ed.querySelectorAll('.scale-editor')).map(se => ({
+      level: se.querySelector('.sc-level').value, score: parseInt(se.querySelector('.sc-score').value, 10) || 0,
+      criterion: se.querySelector('.sc-criterion').value.trim(), feedback: se.querySelector('.sc-feedback').value.trim()
+    }));
+    rubric.push({ number: rubric.length + 1, name, scales });
+  });
+  return rubric;
+}
+async function saveCurrentRubric(goNext) {
+  const q = state.currentQuestions[state.currentQuestionIndex]; if (!q) return;
+  const rubric = collectRubricFromUI(false);
+  if (!rubric.length) { showToast('기준명이 입력된 기준이 최소 1개 필요합니다'); return; }
+  const unnamed = collectRubricFromUI(true).length - rubric.length;
+  if (unnamed > 0 && !confirm(`기준명이 비어 있는 기준 ${unnamed}개는 저장되지 않습니다. 계속할까요?`)) return;
+  const btn = $('rubric-save-btn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>저장 중...';
+  try {
+    await saveRubricForQuestion(state.currentEvaluation.id, q.number, rubric);
+    state.rubricsByQuestion[q.number] = rubric; delete state.rubricDraft[q.number];
+    showToast(`문항 ${q.label} 루브릭을 저장했습니다`);
+    if (goNext && state.currentQuestionIndex < state.currentQuestions.length - 1) state.currentQuestionIndex++;
+    renderRubricEditor();
+  } catch (e) { showToast('저장 실패: ' + e.message); btn.disabled = false; btn.textContent = `문항 ${q.label} 루브릭 저장`; }
+}
+
+/* ---- AI 초안 / 검토 (Apps Script 프롬프트 이식 + 모범답안·핵심요소·소문항 맥락 추가) ---- */
+function scaleInfo(ev) {
+  const is3 = ev.scaleType === '3단계';
+  return { is3, structure: is3 ? '"상" (3점), "중" (2점), "하" (1점)' : '"매우잘함" (4점), "잘함" (3점), "보통" (2점), "노력요함" (1점)',
+    firstLevel: is3 ? '상' : '매우잘함', firstScore: is3 ? 3 : 4, countText: is3 ? '3개(상/중/하)' : '4개(매우잘함/잘함/보통/노력요함)' };
+}
+function questionContextText(ev, q) {
+  const qs = state.currentQuestions;
+  let t = '[평가 정보]\n- 학년/과목: ' + ev.grade + '학년 ' + ev.subject + '\n- 단원: ' + ev.unit + '\n- 평가명: ' + ev.name + '\n';
+  if (ev.isMultiQuestion) {
+    t += '- 평가 유형: 다중 문항 평가(총 ' + qs.length + '문항) 중 문항 ' + q.label + '\n';
+    const sib = qs.filter(x => x.group === q.group && x.number !== q.number);
+    if (sib.length) t += '- 이 문항은 소문항입니다. 같은 묶음의 다른 소문항: ' + sib.map(x => x.label + ' "' + x.content.slice(0, 60) + '"').join(' / ') + ' (이 루브릭은 문항 ' + q.label + '만 평가해야 함)\n';
+  }
+  t += '- 문항 내용: ' + q.content + '\n';
+  if (q.modelAnswer) t += '- 교사가 제공한 모범 답안: ' + q.modelAnswer + '\n';
+  if (q.keyElements) t += '- 교사가 제공한 핵심 요소:\n' + q.keyElements + '\n';
+  return t;
+}
+async function requestAIDraft() {
+  const ev = state.currentEvaluation, q = state.currentQuestions[state.currentQuestionIndex]; if (!q) return;
+  if (!getGeminiKey()) { showToast('설정 탭에서 Gemini API 키를 먼저 저장해 주세요'); return; }
+  if (collectRubricFromUI(false).length && !confirm('현재 작성 중인 루브릭이 있습니다. AI 초안을 받아 적용하면 화면의 내용이 대체됩니다(저장 전까지 시트는 그대로). 계속할까요?')) return;
+  const area = $('ai-feedback-area');
+  area.innerHTML = '<div class="ai-result-card loading-state"><span class="spinner"></span>AI가 문항 ' + q.label + '을 분석해 루브릭 초안을 만드는 중입니다… (보통 10~40초)</div>';
+  const si = scaleInfo(ev);
+  const prompt = '당신은 초등 교사를 돕는 평가 전문가입니다. 다음 평가 문항에 적합한 루브릭 초안을 만들어 주세요.\n\n' +
+    questionContextText(ev, q) + '- 척도: ' + ev.scaleType + ' (' + si.structure + ')\n\n' +
+    '[원칙]\n1. 의미적·논리적 평가 (단순 키워드 포함 여부 아님)\n2. ' + ev.grade + '학년 발달 수준에 맞게\n3. 척도 간 차이는 양(개수)이 아니라 질(깊이·적절성·근거의 연결)로 구분\n4. 같은 의미를 다른 표현으로 써도 인정\n5. 판정 기준은 교사가 그대로 적용할 수 있을 만큼 구체적으로 (어떤 답안이 상/중/하인지 예를 들어)\n' +
+    '6. 핵심 요소가 제공된 경우: 요소 단어를 "언급"만 한 답안과 자기 말로 "풀어 설명"한 답안을 구분하는 기준을 반드시 포함\n7. 문항에 인쇄된 힌트 문구를 그대로 옮겨 적은 것은 높은 척도의 근거가 되지 않음을 반영\n' +
+    (ev.isMultiQuestion ? '8. 이 문항에 특화된 기준만 (다른 문항 내용 X). 기준 1~3개가 적절\n' : '8. 기준 2~4개가 적절\n') +
+    '\nJSON으로만 응답:\n{\n  "designIntent": "설계 의도 2~3문장",\n  "rubric": [{"number": 1, "name": "기준명", "scales": [{"level": "' + si.firstLevel + '", "score": ' + si.firstScore + ', "criterion": "이 척도 답안의 특징", "feedback": "학생에게 줄 피드백"}]}]\n}\n\n척도는 ' + si.countText + '를 모두 포함.';
+  const r = await callGeminiJSON(prompt, { thinking: 'medium', maxTokens: 8192 });
+  if (!r.success || !r.data || !Array.isArray(r.data.rubric)) { area.innerHTML = '<div class="ai-result-card error-state"><strong>오류</strong>: ' + escapeHtml(r.message || 'AI 응답 형식이 올바르지 않습니다') + '</div>'; return; }
+  state._aiDraft = r.data;
+  area.innerHTML = `
+    <div class="ai-result-card success-state">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-weight:700;">🤖 AI가 작성한 루브릭 초안 — 문항 ${q.label}</div><button class="btn btn-ghost btn-small" onclick="$('ai-feedback-area').innerHTML=''">닫기</button></div>
+      <div class="ai-design-intent"><strong>설계 의도</strong><br>${escapeHtml(r.data.designIntent || '')}</div>
+      ${r.data.rubric.map(c => `<div class="draft-criterion"><strong>기준 ${c.number}. ${escapeHtml(c.name)}</strong>${(c.scales || []).map(s => `<div class="draft-scale"><strong>${escapeHtml(s.level)} (${s.score}점)</strong> — ${escapeHtml(s.criterion)}<br><span style="color:var(--muted); font-style:italic;">피드백: ${escapeHtml(s.feedback)}</span></div>`).join('')}</div>`).join('')}
+      <div style="display:flex; gap:8px; margin-top:10px;"><button class="btn btn-primary btn-small" onclick="applyAIDraft()">이 초안 적용하기 (편집 가능)</button><button class="btn btn-ghost btn-small" onclick="requestAIDraft()">다른 초안 받기</button></div>
+      <div class="helper" style="margin-top:6px;">적용 후 각 기준·척도를 수정하고 <strong>저장</strong>을 눌러야 시트에 기록됩니다.</div>
+    </div>`;
+}
+function applyAIDraft() {
+  const d = state._aiDraft; if (!d) return;
+  const ev = state.currentEvaluation; const levels = defaultScales(ev.scaleType);
+  const rubric = d.rubric.map((c, i) => ({
+    number: i + 1, name: String(c.name || ''),
+    scales: levels.map(L => { const f = (c.scales || []).find(s => String(s.level).trim() === L.level) || {}; return { level: L.level, score: f.score != null ? Number(f.score) : L.score, criterion: String(f.criterion || ''), feedback: String(f.feedback || '') }; })
+  }));
+  const q = state.currentQuestions[state.currentQuestionIndex]; state.rubricDraft[q.number] = rubric;
+  renderRubricEditor(); showToast('AI 초안을 적용했습니다. 수정 후 저장하세요.');
+}
+async function requestAIReview() {
+  const ev = state.currentEvaluation, q = state.currentQuestions[state.currentQuestionIndex]; if (!q) return;
+  if (!getGeminiKey()) { showToast('설정 탭에서 Gemini API 키를 먼저 저장해 주세요'); return; }
+  const rubric = collectRubricFromUI(false);
+  if (!rubric.length) { showToast('검토할 루브릭이 없습니다. 먼저 기준을 작성해 주세요.'); return; }
+  const area = $('ai-feedback-area');
+  area.innerHTML = '<div class="ai-result-card loading-state"><span class="spinner"></span>AI가 루브릭을 검토하는 중입니다… (보통 10~30초)</div>';
+  let rt = ''; rubric.forEach(c => { rt += '  기준' + c.number + '. ' + c.name + '\n'; c.scales.forEach(s => { rt += '      "' + s.level + '" (' + s.score + '점) - 판정 기준: ' + (s.criterion || '(미입력)') + '\n'; }); rt += '\n'; });
+  const prompt = '당신은 초등 교사를 돕는 평가 전문가입니다. 다음 루브릭을 검토하고 개선점을 제안해 주세요.\n\n' + questionContextText(ev, q) +
+    '\n[검토 대상 루브릭]\n' + rt + '\n[검토 원칙]\n1. 단순 키워드가 아닌 의미적·논리적 평가가 되도록\n2. ' + ev.grade + '학년 발달 수준에 적합한지\n3. 척도 차이가 양적(개수)이 아닌 질적(깊이, 적절성)으로 구분되는지\n4. 이 문항의 의도를 정확히 반영하는지\n5. 판정 기준이 구체적인지\n6. 같은 의미를 다양한 표현으로 쓰는 것을 인정하는지\n7. 핵심 요소를 "언급"만 한 답안이 최고 척도를 받지 않도록 되어 있는지\n\n' +
+    '다음 JSON으로만 응답:\n{\n  "overallAssessment": "전반 평가 2~3문장",\n  "strengths": ["잘된 점들"],\n  "improvements": [{"criterionNumber": 1, "scaleLevel": "척도명 또는 general", "issue": "문제점", "suggestion": "개선 제안"}],\n  "missingAspects": ["추가 고려 사항"]\n}';
+  const r = await callGeminiJSON(prompt, { thinking: 'medium', maxTokens: 8192 });
+  if (!r.success || !r.data) { area.innerHTML = '<div class="ai-result-card error-state"><strong>오류</strong>: ' + escapeHtml(r.message || '검토 실패') + '</div>'; return; }
+  const rv = r.data;
+  area.innerHTML = `
+    <div class="ai-result-card success-state">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;"><div style="font-weight:700;">🔍 AI 검토 결과 — 문항 ${q.label}</div><button class="btn btn-ghost btn-small" onclick="$('ai-feedback-area').innerHTML=''">닫기</button></div>
+      <div class="review-section-card"><div class="review-section-card-title">종합 평가</div><div style="font-size:13px;">${escapeHtml(rv.overallAssessment || '')}</div></div>
+      ${(rv.strengths || []).length ? `<div class="review-section-card"><div class="review-section-card-title" style="color:var(--green);">✓ 잘 작성된 점</div><ul style="font-size:13px; padding-left:18px;">${rv.strengths.map(s => '<li>' + escapeHtml(s) + '</li>').join('')}</ul></div>` : ''}
+      ${(rv.improvements || []).length ? `<div class="review-section-card"><div class="review-section-card-title" style="color:#A85B1C;">💡 개선 제안</div>${rv.improvements.map(im => `<div class="review-improvement"><div style="font-size:12px; color:var(--muted);">기준 ${escapeHtml(String(im.criterionNumber))}${im.scaleLevel && im.scaleLevel !== 'general' ? ' · ' + escapeHtml(im.scaleLevel) : ' (전체)'}</div><div style="font-size:13px; margin-top:3px;"><strong style="color:#A85B1C;">제안:</strong> ${escapeHtml(im.suggestion || '')}</div><div style="font-size:12px; color:var(--text-sub); margin-top:3px;"><em>관찰:</em> ${escapeHtml(im.issue || '')}</div></div>`).join('')}</div>` : ''}
+      ${(rv.missingAspects || []).length ? `<div class="review-section-card"><div class="review-section-card-title" style="color:#2855A8;">+ 추가 고려할 점</div><ul style="font-size:13px; padding-left:18px;">${rv.missingAspects.map(s => '<li>' + escapeHtml(s) + '</li>').join('')}</ul></div>` : ''}
+      <div class="helper" style="margin-top:6px;">AI 제안을 모두 수용할 필요는 없습니다. 교실 맥락과 학생 수준에 맞춰 취사선택하세요.</div>
+    </div>`;
+}
+
+
+/* ============================================================
+   3단계 — 학생 명단
+   ============================================================ */
+async function getAllClasses() {
+  const values = await readSheet('학생명단'); const seen = {};
+  for (let i = 1; i < values.length; i++) { const r = values[i]; if (r && r[0] && r[1]) seen[Number(r[0]) + '_' + Number(r[1])] = true; }
+  return Object.keys(seen).map(k => { const p = k.split('_'); return { grade: +p[0], class: +p[1] }; }).sort((a, b) => a.grade - b.grade || a.class - b.class);
+}
+async function getStudents(grade, classNum) {
+  const values = await readSheet('학생명단'); const list = [];
+  for (let i = 1; i < values.length; i++) { const r = values[i]; if (r && Number(r[0]) === Number(grade) && Number(r[1]) === Number(classNum)) list.push({ grade: Number(r[0]), class: Number(r[1]), number: Number(r[2]) || 0, name: String(r[3] || '') }); }
+  return list.sort((a, b) => a.number - b.number);
+}
+async function saveStudents(grade, classNum, students) {
+  await deleteRowsWhere('학생명단', r => Number(r[0]) === Number(grade) && Number(r[1]) === Number(classNum));
+  await appendRows('학생명단', students.map(s => [Number(grade), Number(classNum), Number(s.number), String(s.name)]));
+}
+async function loadStudentClasses() {
+  const c = $('student-list'); c.innerHTML = '<p class="loading"><span class="spinner"></span>불러오는 중...</p>';
+  try {
+    state.classes = await getAllClasses();
+    const values = await readSheet('학생명단'); const counts = {};
+    values.slice(1).forEach(r => { if (r && r[0]) { const k = Number(r[0]) + '_' + Number(r[1]); counts[k] = (counts[k] || 0) + 1; } });
+    if (!state.classes.length) { c.innerHTML = '<div class="card"><div class="empty-state"><div class="ei">🧑‍🎓</div><p>아직 등록된 학급이 없습니다.<br>+ 학급 추가 버튼을 눌러 시작하세요.</p></div></div>'; return; }
+    c.innerHTML = state.classes.map(k => `<div class="class-card"><div><div class="ct">${k.grade}학년 ${k.class}반</div><div class="cm">${counts[k.grade + '_' + k.class] || 0}명</div></div>
+      <div style="margin-left:auto; display:flex; gap:6px;"><button class="btn btn-secondary btn-small" onclick="showStudentForm(${k.grade},${k.class})">명단 수정</button><button class="btn btn-danger btn-small" onclick="confirmDeleteClass(${k.grade},${k.class})">학급 삭제</button></div></div>`).join('');
+  } catch (e) { c.innerHTML = '<div class="card">⚠ ' + escapeHtml(e.message) + '</div>'; }
+}
+async function showStudentForm(grade, classNum) {
+  const isEdit = grade !== undefined; let students = [];
+  if (isEdit) { showToast('명단을 불러오는 중...'); try { students = await getStudents(grade, classNum); } catch (e) { showToast(e.message); return; } }
+  const initial = students.map(s => s.number + '. ' + s.name).join('\n');
+  showModal(`
+    <div class="modal-header"><span class="modal-title">${isEdit ? '학생 명단 수정' : '학급 추가'}</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="form-row-inline">
+      <div class="form-row" style="margin:0;"><label>학년 *</label><input type="number" id="st-grade" min="1" max="6" value="${isEdit ? grade : 4}" ${isEdit ? 'readonly' : ''}></div>
+      <div class="form-row" style="margin:0;"><label>반 *</label><input type="number" id="st-class" min="1" max="30" value="${isEdit ? classNum : ''}" ${isEdit ? 'readonly' : ''}></div>
+    </div>
+    <div class="form-row"><label>학생 명단 *</label>
+      <textarea id="st-list" rows="14" placeholder="한 줄에 한 명씩: 번호. 이름&#10;1. 김도윤&#10;2. 박서연&#10;&#10;이름 없이 인원수만 넣으려면 아래 버튼을 쓰세요.">${escapeHtml(initial)}</textarea>
+      <div class="helper">"1 김도윤", "1. 김도윤", "1번 김도윤", 탭 구분 모두 인식됩니다. 엑셀에서 두 열을 복사해 붙여 넣어도 됩니다.</div>
+      <div style="margin-top:6px;"><button class="btn btn-ghost btn-small" onclick="fillNumbersOnly()">번호만 자동 채우기 (이름 없이)</button></div>
+    </div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">취소</button><button class="btn btn-primary" id="st-save-btn" onclick="saveStudentList(${isEdit ? grade : 'null'}, ${isEdit ? classNum : 'null'})">저장</button></div>`);
+}
+function fillNumbersOnly() {
+  const n = parseInt(prompt('학생 수를 입력하세요 (이름은 나중에 수정 가능)', '25'), 10); if (!n || n < 1 || n > 60) return;
+  $('st-list').value = Array.from({ length: n }, (_, i) => (i + 1) + '. ' + (i + 1) + '번').join('\n');
+}
+function parseStudentLines(text) {
+  const out = []; text.split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+    const m = line.match(/^(\d+)\s*(?:번|\.|\t|,|:)?\s*(.*)$/); if (!m) return;
+    out.push({ number: parseInt(m[1], 10), name: (m[2] || '').trim() || (m[1] + '번') });
+  });
+  return out.sort((a, b) => a.number - b.number);
+}
+async function saveStudentList(grade, classNum) {
+  const g = grade || parseInt($('st-grade').value, 10), k = classNum || parseInt($('st-class').value, 10);
+  const students = parseStudentLines($('st-list').value);
+  if (!g || !k) { showToast('학년과 반을 입력해 주세요'); return; }
+  if (!students.length) { showToast('학생 명단을 인식할 수 없습니다'); return; }
+  const dup = students.filter((s, i) => students.findIndex(x => x.number === s.number) !== i).map(s => s.number);
+  if (dup.length) { showToast('번호가 중복됩니다: ' + [...new Set(dup)].join(', ')); return; }
+  const btn = $('st-save-btn'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>저장 중...';
+  try { await saveStudents(g, k, students); closeModal(); showToast(students.length + '명을 저장했습니다'); loadStudentClasses(); }
+  catch (e) { showToast('저장 실패: ' + e.message); btn.disabled = false; btn.textContent = '저장'; }
+}
+async function confirmDeleteClass(grade, classNum) {
+  if (!confirm(`${grade}학년 ${classNum}반 명단을 삭제할까요? (채점 결과는 보존됩니다)`)) return;
+  try { await saveStudents(grade, classNum, []); showToast('삭제했습니다'); loadStudentClasses(); } catch (e) { showToast('삭제 실패: ' + e.message); }
+}
+
+/* ============================================================
+   3단계 — Drive (답안 PDF 폴더 · 업로드 · 목록) — drive.file 범위 안에서 동작
+   ============================================================ */
+const DRIVE_API = 'https://www.googleapis.com/drive/v3/files';
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+function qEsc(s) { return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+async function driveList(q, fields) {
+  const r = await authFetch(DRIVE_API + '?q=' + encodeURIComponent(q) + '&fields=' + encodeURIComponent('files(' + (fields || 'id,name') + ')') + '&pageSize=200&spaces=drive');
+  if (!r.ok) throw new Error('Drive 조회 실패 (' + r.status + ')'); return (await r.json()).files || [];
+}
+async function getOrCreateFolder(name, parentId) {
+  const found = await driveList(`name='${qEsc(name)}' and mimeType='${FOLDER_MIME}' and trashed=false` + (parentId ? ` and '${parentId}' in parents` : ''));
+  if (found.length) return found[0];
+  const r = await authFetch(DRIVE_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: parentId ? [parentId] : undefined }) });
+  if (!r.ok) throw new Error('폴더 생성 실패 (' + r.status + ')'); return r.json();
+}
+function evalFolderName(ev) { const clean = s => String(s || '').replace(/[\\/:*?"<>|]/g, ''); return '[' + ev.grade + '학년 ' + clean(ev.subject) + '] ' + clean(ev.name); }
+async function getOrCreateEvaluationFolder(ev) {
+  const key = 'eg_folder_' + ev.id; const cached = localStorage.getItem(key);
+  if (cached) { try { const r = await authFetch(DRIVE_API + '/' + cached + '?fields=id,name,trashed,webViewLink'); if (r.ok) { const f = await r.json(); if (!f.trashed) return f; } } catch (e) {} localStorage.removeItem(key); }
+  const root = await getOrCreateFolder('논서술형 평가 채점 (웹앱)');
+  const answers = await getOrCreateFolder('답안지', root.id);
+  const folder = await getOrCreateFolder(evalFolderName(ev), answers.id);
+  localStorage.setItem(key, folder.id);
+  const r = await authFetch(DRIVE_API + '/' + folder.id + '?fields=id,name,webViewLink'); return r.ok ? r.json() : folder;
+}
+async function listPdfsInFolder(folderId) {
+  const files = await driveList(`'${folderId}' in parents and mimeType='application/pdf' and trashed=false`, 'id,name,size,createdTime,webViewLink');
+  return files.map(f => ({ id: f.id, name: f.name, size: Number(f.size) || 0, createdAt: f.createdTime, url: f.webViewLink })).sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+}
+function uploadPdfToFolder(file, folderId, onProgress) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const init = await authFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size', {
+        method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/pdf', 'X-Upload-Content-Length': String(file.size) },
+        body: JSON.stringify({ name: file.name, parents: [folderId], mimeType: 'application/pdf' })
+      });
+      if (!init.ok) throw new Error('업로드 시작 실패 (' + init.status + ')');
+      const loc = init.headers.get('Location');
+      if (!loc) {
+        // 세션 URL을 못 받는 환경 → 5MB 이하는 multipart 로 대체
+        if (file.size > 5 * 1024 * 1024) throw new Error('업로드 세션을 받지 못했습니다 (5MB 초과 파일). 브라우저를 바꾸거나 "내 Drive에서 가져오기"를 이용하세요.');
+        const fd = new FormData();
+        fd.append('metadata', new Blob([JSON.stringify({ name: file.name, parents: [folderId], mimeType: 'application/pdf' })], { type: 'application/json' }));
+        fd.append('file', file);
+        const mr = await authFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size', { method: 'POST', body: fd });
+        if (!mr.ok) throw new Error('업로드 실패 (' + mr.status + ')');
+        if (onProgress) onProgress(1); resolve(await mr.json()); return;
+      }
+      const xhr = new XMLHttpRequest(); xhr.open('PUT', loc, true);
+      xhr.setRequestHeader('Content-Type', 'application/pdf');
+      xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText)); else reject(new Error('업로드 실패 (' + xhr.status + ')')); };
+      xhr.onerror = () => reject(new Error('업로드 중 네트워크 오류'));
+      xhr.send(file);
+    } catch (e) { reject(e); }
+  });
+}
+async function handlePdfUpload(files) {
+  if (!state.folder) { showToast('먼저 평가와 학급을 선택해 주세요'); return; }
+  const list = Array.from(files || []).filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+  if (!list.length) { showToast('PDF 파일만 업로드할 수 있습니다'); return; }
+  const prog = $('upload-progress'); prog.style.display = 'block';
+  let ok = 0;
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    prog.innerHTML = `(${i + 1}/${list.length}) ${escapeHtml(f.name)} 업로드 중... <span id="up-pct">0%</span><div class="progress-bar"><div id="up-bar"></div></div>`;
+    try {
+      const dup = state.pdfs.find(p => p.name === f.name);
+      if (dup && !confirm(`"${f.name}" 파일이 이미 있습니다. 하나 더 올릴까요? (취소하면 건너뜀)`)) continue;
+      await uploadPdfToFolder(f, state.folder.id, p => { const pct = Math.round(p * 100); const a = $('up-pct'), b = $('up-bar'); if (a) a.textContent = pct + '%'; if (b) b.style.width = pct + '%'; });
+      ok++;
+    } catch (e) { showToast(f.name + ': ' + e.message); }
+  }
+  prog.style.display = 'none';
+  if (ok) showToast(ok + '개 파일을 올렸습니다');
+  await refreshPdfList();
+}
+function importPdfFromDrive() {
+  if (!getPickerKey()) { showPickerSettings(); return; }
+  if (!state.pickerReady || !state.folder) { showToast('잠시 후 다시 시도해 주세요'); return; }
+  const view = new google.picker.DocsView(google.picker.ViewId.DOCS).setMimeTypes('application/pdf').setIncludeFolders(true).setMode(google.picker.DocsViewMode.LIST);
+  new google.picker.PickerBuilder().setAppId(CONFIG.APP_ID).setOAuthToken(state.token).setDeveloperKey(getPickerKey())
+    .enableFeature(google.picker.Feature.MULTISELECT_ENABLED).addView(view).setTitle('답안 PDF 선택 (여러 개 가능)').setLocale('ko')
+    .setCallback(async data => {
+      if (data.action !== google.picker.Action.PICKED) return;
+      showToast('선택한 파일을 답안 폴더로 복사하는 중...');
+      let ok = 0;
+      for (const d of data.docs || []) {
+        try {
+          const r = await authFetch(DRIVE_API + '/' + d.id + '/copy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: d.name, parents: [state.folder.id] }) });
+          if (r.ok) ok++; else showToast(d.name + ' 복사 실패 (' + r.status + ')');
+        } catch (e) { showToast(d.name + ': ' + e.message); }
+      }
+      showToast(ok + '개 파일을 가져왔습니다 (원본은 그대로, 답안 폴더에 사본 생성)');
+      await refreshPdfList();
+    }).build().setVisible(true);
+}
+async function deletePdf(id, name) {
+  if (!confirm(`"${name}" 파일을 휴지통으로 보낼까요?`)) return;
+  try {
+    const r = await authFetch(DRIVE_API + '/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+    if (!r.ok) throw new Error('삭제 실패 (' + r.status + ')');
+    delete state.pdfCache[id]; delete state.pdfDocs[id]; delete state.pageCounts[id];
+    showToast('휴지통으로 보냈습니다'); await refreshPdfList();
+  } catch (e) { showToast(e.message); }
+}
+async function fetchPdfBytes(id) {
+  if (state.pdfCache[id]) return state.pdfCache[id];
+  const r = await authFetch(DRIVE_API + '/' + id + '?alt=media');
+  if (!r.ok) throw new Error('PDF 내려받기 실패 (' + r.status + ')');
+  const buf = await r.arrayBuffer(); state.pdfCache[id] = buf; return buf;
+}
+async function getPdfDoc(id) {
+  if (state.pdfDocs[id]) return state.pdfDocs[id];
+  if (!window.pdfjsLib) throw new Error('PDF 라이브러리를 불러오지 못했습니다. 새로고침해 주세요.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const buf = await fetchPdfBytes(id);
+  const doc = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+  state.pdfDocs[id] = doc; state.pageCounts[id] = doc.numPages; return doc;
+}
+async function getPdfPageCount(id) { if (state.pageCounts[id]) return state.pageCounts[id]; const d = await getPdfDoc(id); return d.numPages; }
+async function renderPdfPage(id, pageNo, width) {
+  const doc = await getPdfDoc(id); const page = await doc.getPage(pageNo);
+  const vp0 = page.getViewport({ scale: 1 }); const scale = (width || 260) / vp0.width; const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas'); canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise; return canvas;
+}
+function fmtSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.round(b / 1024) + ' KB'; }
+function detectClassFromFilename(name) { const m = String(name || '').match(/(\d{1,2})\s*반/); return m ? parseInt(m[1], 10) : null; }
+
+/* ============================================================
+   3단계 — AI 채점 탭: 셋업 · 현황판 · PDF 목록 · 매칭
+   ============================================================ */
+async function prepareGradingTab() {
+  const es = $('grading-eval-select'), cs = $('grading-class-select');
+  const curE = es.value, curC = cs.value;
+  if (!state.evaluations.length) { try { state.evaluations = await getAllEvaluations(); } catch (e) {} }
+  try { state.classes = await getAllClasses(); } catch (e) { showToast(e.message); }
+  es.innerHTML = '<option value="">— 평가 선택 —</option>' + state.evaluations.slice().reverse().map(e => `<option value="${e.id}">${escapeHtml(e.name)} (${e.grade}학년 ${escapeHtml(e.subject)})</option>`).join('');
+  cs.innerHTML = '<option value="">— 학급 선택 —</option>' + state.classes.map(c => `<option value="${c.grade}_${c.class}">${c.grade}학년 ${c.class}반</option>`).join('');
+  es.value = curE; cs.value = curC;
+  if (!es.value && state.evaluations.length === 1) es.value = state.evaluations[0].id;
+  if (es.value) loadClassStatusBoard(es.value);
+}
+function currentSetup() {
+  const evId = $('grading-eval-select').value, cls = $('grading-class-select').value;
+  if (!evId || !cls) return null;
+  const [g, k] = cls.split('_').map(Number); return { ev: findEvaluation(evId), grade: g, classNum: k };
+}
+async function onGradingSetupChanged() {
+  const evId = $('grading-eval-select').value;
+  if (evId) loadClassStatusBoard(evId);
+  const s = currentSetup();
+  $('folder-area').style.display = s ? 'block' : 'none'; $('matching-area').style.display = 'none';
+  if (!s) return;
+  state.match = null; state.pdfs = [];
+  $('folder-info').innerHTML = '<span class="spinner"></span>답안 폴더를 준비하는 중...';
+  try {
+    state.folder = await getOrCreateEvaluationFolder(s.ev);
+    $('folder-info').innerHTML = `📁 <strong>${escapeHtml(state.folder.name)}</strong> — 내 Drive › 논서술형 평가 채점 (웹앱) › 답안지 안에 있습니다. 여기에 올린 PDF만 이 평가의 답안으로 인식합니다.`;
+    $('open-folder-btn').href = state.folder.webViewLink || ('https://drive.google.com/drive/folders/' + state.folder.id);
+    await refreshPdfList();
+  } catch (e) { $('folder-info').innerHTML = '⚠ ' + escapeHtml(e.message); }
+}
+async function getClassGradingStatus(evId) {
+  const [sv, rv] = await Promise.all([readSheet('학생명단'), readSheet('채점결과')]);
+  const totals = {}, confirmed = {}, pending = {};
+  sv.slice(1).forEach(r => { if (r && r[0]) { const k = Number(r[0]) + '_' + Number(r[1]); totals[k] = (totals[k] || 0) + 1; } });
+  rv.slice(1).forEach(r => { if (!r || String(r[0]) !== evId) return; const k = Number(r[1]) + '_' + Number(r[2]); if (String(r[12] || '확정') === '대기') pending[k] = (pending[k] || 0) + 1; else confirmed[k] = (confirmed[k] || 0) + 1; });
+  return Object.keys(totals).map(k => { const p = k.split('_'); return { grade: +p[0], classNum: +p[1], total: totals[k], confirmed: confirmed[k] || 0, pending: pending[k] || 0 }; }).sort((a, b) => a.grade - b.grade || a.classNum - b.classNum);
+}
+async function loadClassStatusBoard(evId) {
+  const el = $('class-status-board'); el.innerHTML = '<div class="helper" style="margin-top:8px;"><span class="spinner"></span>반별 현황 확인 중...</div>';
+  try {
+    const list = await getClassGradingStatus(evId); const cur = $('grading-class-select').value;
+    if (!list.length) { el.innerHTML = '<div class="helper" style="margin-top:8px;">등록된 학급이 없습니다. 학생 명단 탭에서 먼저 등록하세요.</div>'; return; }
+    el.innerHTML = '<div class="helper" style="margin-top:10px;">반별 채점 현황 (클릭하면 그 반으로 이동)</div><div class="status-chips">' + list.map(c => {
+      const key = c.grade + '_' + c.classNum; const done = c.confirmed >= c.total && c.total > 0; const partial = !done && (c.confirmed + c.pending) > 0;
+      return `<span class="status-chip ${key === cur ? 'active' : ''} ${done ? 'done' : partial ? 'partial' : ''}" onclick="goToClass(${c.grade},${c.classNum})">${c.grade}-${c.classNum} · ${done ? '✅ 완료' : (c.confirmed + '/' + c.total + ' 확정' + (c.pending ? ' · 대기 ' + c.pending : ''))}</span>`;
+    }).join('') + '</div>';
+  } catch (e) { el.innerHTML = ''; }
+}
+function goToClass(grade, classNum) { $('grading-class-select').value = grade + '_' + classNum; onGradingSetupChanged(); }
+
+async function refreshPdfList() {
+  if (!state.folder) return;
+  const el = $('pdf-list'); el.innerHTML = '<p class="loading"><span class="spinner"></span>PDF 목록 확인 중...</p>';
+  try { state.pdfs = await listPdfsInFolder(state.folder.id); } catch (e) { el.innerHTML = '⚠ ' + escapeHtml(e.message); return; }
+  renderPdfList();
+  await refreshMatching();
+}
+function renderPdfList() {
+  const el = $('pdf-list'); const s = currentSetup();
+  if (!state.pdfs.length) { el.innerHTML = '<div class="empty-state" style="padding:16px;">아직 올린 PDF가 없습니다. 위에서 PDF를 올리거나 Drive에서 가져오세요.</div>'; return; }
+  el.innerHTML = state.pdfs.map(p => {
+    const det = detectClassFromFilename(p.name); const cls = s && det !== null ? (det === s.classNum ? 'this-class' : 'other-class') : '';
+    const pc = state.pageCounts[p.id];
+    return `<div class="pdf-row ${cls}"><span>📄</span><span class="pn">${escapeHtml(p.name)}</span>
+      <span class="pm">${fmtSize(p.size)}${pc ? ' · ' + pc + '쪽' : ''}</span>
+      ${cls === 'this-class' ? '<span class="badge badge-green">현재 반 파일</span>' : cls === 'other-class' ? '<span class="badge badge-red">' + det + '반 파일로 보임</span>' : ''}
+      <a class="mini-btn" href="${escapeHtml(p.url)}" target="_blank">열기</a><button class="mini-btn" style="color:var(--red);" onclick="deletePdf('${p.id}','${escapeJs(p.name)}')">삭제</button></div>`;
+  }).join('');
+}
+
+/* ---- 매칭 ---- */
+async function getPageMappings(evId, grade, classNum) {
+  const values = await readSheet('학생페이지매핑');
+  return values.slice(1).filter(r => r && r[0] === evId && Number(r[1]) === grade && Number(r[2]) === classNum)
+    .map(r => ({ number: Number(r[3]), startPage: Number(r[4]) || 0, endPage: Number(r[5]) || 0, isAbsent: r[6] === '예' || isTrue(r[6]), note: String(r[7] || '') }));
+}
+async function savePageMappings(evId, grade, classNum, mappings) {
+  await deleteRowsWhere('학생페이지매핑', r => r[0] === evId && Number(r[1]) === grade && Number(r[2]) === classNum);
+  await appendRows('학생페이지매핑', mappings.map(m => [evId, grade, classNum, Number(m.number), m.isAbsent ? '' : Number(m.startPage) || 0, m.isAbsent ? '' : Number(m.endPage) || 0, m.isAbsent ? '예' : '아니오', String(m.note || '')]));
+}
+async function getGradedStatus(evId, grade, classNum) {
+  const values = await readSheet('채점결과'); const st = {};
+  values.slice(1).forEach(r => { if (r && String(r[0]) === evId && Number(r[1]) === grade && Number(r[2]) === classNum) st[Number(r[3])] = String(r[12] || '확정'); });
+  return st;
+}
+function matchByNumber(fileName, num) {
+  const n = fileName.replace(/\.pdf$/i, ''); let m = n.match(/^0*(\d+)(?:번)?[\s._\-]/); if (m) return parseInt(m[1], 10) === num;
+  m = n.match(/^0*(\d+)(?:번)?$/); return m ? parseInt(m[1], 10) === num : false;
+}
+function matchByName(fileName, name) { if (!name || /^\d+번$/.test(name)) return false; return fileName.replace(/\.pdf$/i, '').replace(/\s/g, '').includes(name.replace(/\s/g, '')); }
+
+async function refreshMatching() {
+  const s = currentSetup(); if (!s) return;
+  $('matching-area').style.display = 'block'; $('matching-body').innerHTML = '<p class="loading"><span class="spinner"></span>학생 명단과 매핑 정보를 불러오는 중...</p>';
+  try {
+    const [students, existing, graded] = await Promise.all([getStudents(s.grade, s.classNum), getPageMappings(s.ev.id, s.grade, s.classNum), getGradedStatus(s.ev.id, s.grade, s.classNum)]);
+    const prev = state.match && state.match.evId === s.ev.id && state.match.grade === s.grade && state.match.classNum === s.classNum ? state.match : null;
+    // 개별 PDF 자동 매칭
+    const used = {}; const individual = {};
+    students.forEach(st => { let f = state.pdfs.find(p => !used[p.id] && matchByNumber(p.name, st.number)); if (!f) f = state.pdfs.find(p => !used[p.id] && matchByName(p.name, st.name)); if (f) { used[f.id] = true; individual[st.number] = f.id; } });
+    const indivCount = Object.keys(individual).length;
+    let mode = prev ? prev.mode : (indivCount >= 2 && indivCount >= state.pdfs.length / 2 ? 'individual' : 'unified');
+    // 통합 PDF 자동 선택: 현재 반 파일 1개 → 그것, 없고 PDF 1개 → 그것
+    let selectedPdfId = prev ? prev.selectedPdfId : null;
+    if (selectedPdfId && !state.pdfs.find(p => p.id === selectedPdfId)) selectedPdfId = null;
+    if (!selectedPdfId) { const mine = state.pdfs.filter(p => detectClassFromFilename(p.name) === s.classNum); if (mine.length === 1) selectedPdfId = mine[0].id; else if (state.pdfs.length === 1 && detectClassFromFilename(state.pdfs[0].name) === null) selectedPdfId = state.pdfs[0].id; }
+    // 페이지 매핑: 기존 저장본 우선, 없으면 자동
+    const pps = s.ev.pagesPerStudent || 1;
+    let mappings = students.map(st => { const e = existing.find(x => x.number === st.number); return { number: st.number, name: st.name, startPage: e ? e.startPage : 0, endPage: e ? e.endPage : 0, isAbsent: e ? e.isAbsent : false, note: e ? e.note : '' }; });
+    if (!existing.length) recalcPages(mappings, pps);
+    state.match = { evId: s.ev.id, grade: s.grade, classNum: s.classNum, students, mode, selectedPdfId, pageCount: selectedPdfId ? (state.pageCounts[selectedPdfId] || 0) : 0, mappings, individual: prev ? Object.assign(individual, prev.individual) : individual, graded, pps, savedMapping: existing.length > 0 };
+    renderModeToggle(); renderMatching();
+    if (selectedPdfId && !state.pageCounts[selectedPdfId]) loadPageCount(selectedPdfId);
+  } catch (e) { $('matching-body').innerHTML = '⚠ ' + escapeHtml(e.message); }
+}
+function recalcPages(mappings, pps) { let p = 1; mappings.forEach(m => { if (m.isAbsent) { m.startPage = 0; m.endPage = 0; } else { m.startPage = p; m.endPage = p + pps - 1; p += pps; } }); }
+function renderModeToggle() {
+  const m = state.match; $('mode-toggle').innerHTML = `
+    <label class="${m.mode === 'unified' ? 'active' : ''}"><input type="radio" name="match-mode" ${m.mode === 'unified' ? 'checked' : ''} onchange="setMatchMode('unified')"><div><strong>📚 반 전체 통합 PDF</strong><small>스캐너로 반 전체를 한 파일로 스캔 · 학생당 ${m.pps}쪽씩 번호순</small></div></label>
+    <label class="${m.mode === 'individual' ? 'active' : ''}"><input type="radio" name="match-mode" ${m.mode === 'individual' ? 'checked' : ''} onchange="setMatchMode('individual')"><div><strong>📄 학생별 개별 PDF</strong><small>파일명 "번호_이름.pdf" 로 자동 매칭</small></div></label>`;
+}
+function setMatchMode(mode) { state.match.mode = mode; renderModeToggle(); renderMatching(); }
+async function loadPageCount(id) {
+  try { const n = await getPdfPageCount(id); if (state.match && state.match.selectedPdfId === id) { state.match.pageCount = n; renderMatching(); } renderPdfList(); }
+  catch (e) { showToast('페이지 수 확인 실패: ' + e.message); }
+}
+function selectUnifiedPdf(id) { state.match.selectedPdfId = id; state.match.pageCount = state.pageCounts[id] || 0; renderMatching(); if (!state.pageCounts[id]) loadPageCount(id); }
+function renderMatching() { if (!state.match) return; if (state.match.mode === 'unified') renderUnified(); else renderIndividual(); }
+
+function studentBadge(num) { const g = state.match.graded[num]; return g === '대기' ? '<span class="badge badge-amber">검토대기</span>' : g ? '<span class="badge badge-green">채점·확정</span>' : ''; }
+function renderUnified() {
+  const m = state.match, ev = findEvaluation(m.evId), body = $('matching-body');
+  const absent = m.mappings.filter(x => x.isAbsent).length, active = m.students.length - absent, expected = active * m.pps;
+  // PDF 선택
+  let pdfHtml = '';
+  if (!state.pdfs.length) pdfHtml = '<div class="check-warn">아직 PDF가 없습니다. 위에서 통합 PDF를 올려 주세요.</div>';
+  else {
+    const ann = state.pdfs.map(p => { const d = detectClassFromFilename(p.name); return { p, d, rank: d === null ? 1 : (d === m.classNum ? 0 : 2) }; }).sort((a, b) => a.rank - b.rank);
+    pdfHtml = '<div class="form-row"><label>사용할 통합 PDF</label>' + ann.map(a => `<label class="model-option ${m.selectedPdfId === a.p.id ? 'selected' : ''}" style="padding:8px 11px;"><input type="radio" name="unified-pdf" ${m.selectedPdfId === a.p.id ? 'checked' : ''} onchange="${a.rank === 2 ? `confirmOtherClassPdf('${a.p.id}',${a.d})` : `selectUnifiedPdf('${a.p.id}')`}"><div><strong>${a.rank === 0 ? '⭐ ' : ''}${escapeHtml(a.p.name)}</strong><div class="desc">${fmtSize(a.p.size)}${state.pageCounts[a.p.id] ? ' · ' + state.pageCounts[a.p.id] + '쪽' : ''}${a.rank === 0 ? ' · <span style="color:var(--green);">현재 반 파일</span>' : a.rank === 2 ? ' · <span style="color:var(--red);">' + a.d + '반 파일로 보임 — 반이 다르면 채점이 전부 어긋납니다</span>' : ''}</div></div></label>`).join('') + '</div>';
+  }
+  let check = '';
+  if (m.selectedPdfId) {
+    if (!m.pageCount) check = '<div class="helper"><span class="spinner"></span>PDF 페이지 수를 확인하는 중...</div>';
+    else if (m.pageCount === expected) check = `<div class="check-ok">✓ PDF ${m.pageCount}쪽 = 채점 대상 ${active}명 × ${m.pps}쪽. 쪽수가 일치합니다. 학생 이름·번호는 미리보기로 별도 확인하세요.</div>`;
+    else check = `<div class="check-warn">⚠ PDF는 <strong>${m.pageCount}쪽</strong>인데 예상은 <strong>${expected}쪽</strong>(${active}명 × ${m.pps}쪽)입니다. ${m.pageCount < expected ? '결시생이 있다면 "결시"에 체크하세요. ' : '빈 페이지나 추가 페이지가 있을 수 있습니다. '}아래 "👁 확인"으로 학생별 페이지를 눈으로 확인하세요.</div>`;
+  }
+  const rows = m.mappings.map(x => {
+    const bad = !x.isAbsent && m.pageCount && x.endPage > m.pageCount;
+    return `<tr class="${x.isAbsent ? 'absent' : ''} ${m.graded[x.number] ? 'graded' : ''}">
+      <td class="num">${String(x.number).padStart(2, '0')} ${escapeHtml(x.name)}</td>
+      <td>${x.isAbsent ? '<span style="color:var(--amber);">결시 · 페이지 없음</span>' : `<span class="pg ${bad ? 'bad' : ''}">${x.startPage}${m.pps > 1 ? '~' + x.endPage : ''}쪽</span>${bad ? ' <span style="color:var(--red); font-size:11px;">PDF 범위 초과</span>' : ''}`}</td>
+      <td>${x.isAbsent ? '' : `<input type="number" min="1" value="${x.startPage}" title="이 학생의 시작 페이지를 바꾸면 그 아래 학생들도 순서대로 다시 계산됩니다" onchange="setStartPage(${x.number}, this.value)">`}</td>
+      <td><label style="font-size:12px; white-space:nowrap;"><input type="checkbox" ${x.isAbsent ? 'checked' : ''} onchange="toggleAbsent(${x.number}, this.checked)"> 결시</label></td>
+      <td>${x.isAbsent || !m.selectedPdfId ? '' : `<button class="mini-btn" onclick="previewStudentPages(${x.number})">👁 확인</button>`}</td>
+      <td>${studentBadge(x.number)}</td></tr>`;
+  }).join('');
+  body.innerHTML = `
+    <div class="stats"><div class="stat"><span class="n">${m.students.length}</span><span class="l">전체 학생</span></div><div class="stat ok"><span class="n">${active}</span><span class="l">채점 대상</span></div><div class="stat warn"><span class="n">${absent}</span><span class="l">결시</span></div><div class="stat"><span class="n">${m.pps}</span><span class="l">학생당 쪽수</span></div>${m.pageCount ? `<div class="stat"><span class="n">${m.pageCount}</span><span class="l">PDF 쪽수</span></div>` : ''}</div>
+    ${pdfHtml}${check}
+    ${m.students.length ? '' : '<div class="check-bad">이 학급에 학생이 없습니다. 학생 명단 탭에서 등록하세요.</div>'}
+    <div class="helper" style="margin-bottom:6px;">번호순으로 ${m.pps}쪽씩 자동 배정했습니다. 결시생의 빈 답안지 포함 여부를 선택할 수 있습니다. 스캔 순서가 다르면 "시작쪽"을 직접 고치세요.${m.savedMapping ? ' <span class="badge badge-blue">저장된 매핑 불러옴</span>' : ''}</div>
+    <div style="overflow-x:auto;"><table class="map-table"><thead><tr><th>학생</th><th>페이지</th><th>시작쪽</th><th>결시</th><th>확인</th><th>상태</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; align-items:center;">
+      <button class="btn btn-secondary" onclick="saveMappingUI()">💾 페이지 매핑 저장</button>
+      <button class="btn btn-ghost btn-small" onclick="resetMapping()">자동 배정으로 되돌리기</button>
+      <button class="btn btn-primary" onclick="startGradingPlaceholder()" ${m.selectedPdfId && active ? '' : 'disabled'}>AI 채점 준비 →</button>
+    </div>`;
+}
+function confirmOtherClassPdf(id, det) {
+  if (!confirm(`이 파일은 ${det}반 파일로 보입니다. 지금은 ${state.match.classNum}반을 채점 중입니다.\n\n반이 다르면 학생과 답안이 어긋나 채점이 완전히 잘못됩니다. 정말 이 파일을 사용할까요?`)) { renderMatching(); return; }
+  selectUnifiedPdf(id);
+}
+function toggleAbsent(num, on) { const m = state.match; const x = m.mappings.find(y => y.number === num); if (!x) return; x.isAbsent = on; x.note = on ? '결시' : ''; recalcPages(m.mappings, m.pps); renderMatching(); }
+function setStartPage(num, val) {
+  const m = state.match; const i = m.mappings.findIndex(y => y.number === num); const start = parseInt(val, 10); if (i < 0 || !start || start < 1) { renderMatching(); return; }
+  let p = start; for (let k = i; k < m.mappings.length; k++) { const x = m.mappings[k]; if (x.isAbsent) continue; x.startPage = p; x.endPage = p + m.pps - 1; p += m.pps; }
+  renderMatching();
+}
+function resetMapping() { const m = state.match; m.mappings.forEach(x => { x.isAbsent = false; x.note = ''; }); recalcPages(m.mappings, m.pps); renderMatching(); }
+async function saveMappingUI() {
+  const m = state.match; if (!m) return;
+  try { await savePageMappings(m.evId, m.grade, m.classNum, m.mappings); m.savedMapping = true; showToast('페이지 매핑을 저장했습니다 (시트: 학생페이지매핑)'); renderMatching(); }
+  catch (e) { showToast('저장 실패: ' + e.message); }
+}
+async function previewStudentPages(num) {
+  const m = state.match; const x = m.mappings.find(y => y.number === num); if (!x || !m.selectedPdfId) return;
+  showModal(`<div class="modal-header"><span class="modal-title">👁 ${String(x.number).padStart(2, '0')} ${escapeHtml(x.name)} — ${x.startPage}${m.pps > 1 ? '~' + x.endPage : ''}쪽</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div class="helper" style="margin-bottom:10px;">답안지에 적힌 번호·이름이 이 학생과 같은지 확인하세요. 다르면 시작쪽을 고치거나 결시를 체크하세요.</div>
+    <div class="thumb-grid" id="thumb-grid"><span class="spinner"></span>페이지를 그리는 중...</div>
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">닫기</button></div>`);
+  try {
+    const grid = $('thumb-grid'); grid.innerHTML = '';
+    for (let p = x.startPage; p <= x.endPage; p++) {
+      if (p > (m.pageCount || 9e9)) { grid.insertAdjacentHTML('beforeend', `<figure><div class="check-bad">${p}쪽 없음 (PDF 범위 초과)</div></figure>`); continue; }
+      const canvas = await renderPdfPage(m.selectedPdfId, p, Math.min(340, Math.floor(window.innerWidth * 0.42)));
+      const fig = document.createElement('figure'); fig.appendChild(canvas); const cap = document.createElement('figcaption'); cap.textContent = p + '쪽'; fig.appendChild(cap); grid.appendChild(fig);
+    }
+  } catch (e) { $('thumb-grid').innerHTML = '⚠ ' + escapeHtml(e.message); }
+}
+
+function renderIndividual() {
+  const m = state.match, body = $('matching-body');
+  const usedIds = new Set(Object.values(m.individual));
+  const matched = m.students.filter(s => m.individual[s.number]).length;
+  const unmatched = state.pdfs.filter(p => !usedIds.has(p.id));
+  const opts = sel => '<option value="">— PDF 없음 —</option>' + state.pdfs.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+  const rows = m.students.map(s => { const pid = m.individual[s.number]; return `<tr class="${m.graded[s.number] ? 'graded' : ''}"><td class="num">${String(s.number).padStart(2, '0')} ${escapeHtml(s.name)}</td>
+    <td>${pid ? '<span style="color:var(--green);">✓</span>' : '<span style="color:var(--amber);">⚠ 없음</span>'} <select onchange="setStudentPdf(${s.number}, this.value)">${opts(pid)}</select></td>
+    <td>${pid ? `<span class="pm" style="font-size:12px;color:var(--muted);">${state.pageCounts[pid] ? state.pageCounts[pid] + '쪽' : ''}</span>` : ''}</td><td>${studentBadge(s.number)}</td></tr>`; }).join('');
+  body.innerHTML = `
+    <div class="stats"><div class="stat ok"><span class="n">${matched}</span><span class="l">매칭됨</span></div><div class="stat warn"><span class="n">${m.students.length - matched}</span><span class="l">PDF 없는 학생</span></div><div class="stat warn"><span class="n">${unmatched.length}</span><span class="l">매칭 안 된 PDF</span></div></div>
+    <div class="helper" style="margin-bottom:8px;">파일명 앞의 번호("02_루피.pdf", "2번 루피.pdf") 또는 이름으로 자동 매칭했습니다. 틀리면 드롭다운에서 직접 고르세요. PDF가 없는 학생은 미등록 상태로 남고 채점 대상에서 제외됩니다.</div>
+    <div style="overflow-x:auto;"><table class="map-table"><thead><tr><th>학생</th><th>답안 PDF</th><th></th><th>상태</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${unmatched.length ? `<div class="check-warn" style="margin-top:10px;">매칭되지 않은 PDF: ${unmatched.map(p => escapeHtml(p.name)).join(', ')}<br><span style="font-size:12px;">반 전체 통합 파일이라면 위에서 "반 전체 통합 PDF"로 바꾸세요.</span></div>` : ''}
+    <div style="display:flex; gap:8px; margin-top:14px;"><button class="btn btn-primary" onclick="startGradingPlaceholder()" ${matched ? '' : 'disabled'}>AI 채점 준비 →</button></div>`;
+}
+function setStudentPdf(num, pid) { const m = state.match; if (!pid) delete m.individual[num]; else { Object.keys(m.individual).forEach(k => { if (m.individual[k] === pid) delete m.individual[k]; }); m.individual[num] = pid; } renderMatching(); }
+
+// 4단계 채점 엔진에 넘길 셋업 (현재 매칭 상태를 그대로 묶음)
+function buildGradingSetup() {
+  const m = state.match; if (!m) return null;
+  const ev = findEvaluation(m.evId);
+  const targets = m.mode === 'unified'
+    ? m.mappings.filter(x => !x.isAbsent).map(x => ({ number: x.number, name: x.name, pdfId: m.selectedPdfId, startPage: x.startPage, endPage: x.endPage }))
+    : m.students.filter(s => m.individual[s.number]).map(s => ({ number: s.number, name: s.name, pdfId: m.individual[s.number], startPage: 1, endPage: 0 }));
+  return { ev, grade: m.grade, classNum: m.classNum, mode: m.mode, targets, graded: m.graded };
+}
+function startGradingPlaceholder() { prepareRun().catch(e => showToast(e.message)); }
+
+/* ============================================================
+   시작
+   ============================================================ */
