@@ -11,7 +11,7 @@ const CONFIG = {
 
 // 저장 키 (localStorage)
 const LS = {
-  TOKEN: 'eg_token', TOKEN_EXP: 'eg_token_exp', USER: 'eg_user', LOGGED_BEFORE: 'eg_logged_before',
+  GRANTED_SCOPES: 'eg_granted_scopes', TOKEN: 'eg_token', TOKEN_EXP: 'eg_token_exp', USER: 'eg_user', LOGGED_BEFORE: 'eg_logged_before',
   SHEET_ID: 'eg_sheet_id', GEMINI_KEY: 'eg_gemini_key', MODEL: 'eg_model', SPEED: 'eg_speed'
 };
 
@@ -79,7 +79,7 @@ function redirectUri() {
    로그인 — OAuth 2.0 (리다이렉트 방식, 로그인 유지)
    - 토큰은 약 1시간 유효. 만료되면 prompt=none 으로 조용히 재발급(구글 세션이 살아있으면 화면 깜빡임만 있음)
    ============================================================ */
-function login(silent) {
+function googleLoginUrl(silent, requestConsent = false) {
   if (CONFIG.CLIENT_ID.startsWith('YOUR_')) { showLoginError('CONFIG.CLIENT_ID 가 설정되지 않았습니다. index.html 상단의 CONFIG를 채워 주세요.'); return; }
   const params = new URLSearchParams({
     client_id: CONFIG.CLIENT_ID,
@@ -89,9 +89,10 @@ function login(silent) {
     include_granted_scopes: 'true',
     state: makeOAuthState()
   });
-  if (silent) params.set('prompt', 'none'); else params.set('prompt', 'select_account');
-  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+  params.set('prompt', silent ? 'none' : requestConsent ? 'consent select_account' : 'select_account');
+  return 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
 }
+function login(silent, requestConsent = false) { const url = googleLoginUrl(silent, requestConsent); if (url) location.href = url; }
 function showLoginError(msg) { const e = $('login-error'); e.style.display = 'block'; e.innerHTML = '⚠ ' + escapeHtml(msg); }
 
 // URL 해시에서 토큰 회수
@@ -112,6 +113,9 @@ function handleAuthRedirect() {
   const token = h.get('access_token');
   if (!token) return false;
   const expiresIn = parseInt(h.get('expires_in') || '3600', 10);
+  // The granted scopes belong to this token, not the previous account/session.
+  if (h.has('scope')) localStorage.setItem(LS.GRANTED_SCOPES, JSON.stringify(h.get('scope').split(/\s+/).filter(Boolean)));
+  else localStorage.removeItem(LS.GRANTED_SCOPES);
   localStorage.setItem(LS.TOKEN, token);
   localStorage.setItem(LS.TOKEN_EXP, String(Date.now() + (expiresIn - 60) * 1000));
   localStorage.setItem(LS.LOGGED_BEFORE, '1');
@@ -123,7 +127,7 @@ function loadToken() {
   if (t && Date.now() < exp) { state.token = t; return true; }
   return false;
 }
-function clearToken() { localStorage.removeItem(LS.TOKEN); localStorage.removeItem(LS.TOKEN_EXP); state.token = null; }
+function clearToken() { localStorage.removeItem(LS.GRANTED_SCOPES); localStorage.removeItem(LS.TOKEN); localStorage.removeItem(LS.TOKEN_EXP); state.token = null; }
 function logout() {
   if (!confirm('로그아웃할까요? (스프레드시트 연결과 설정은 이 브라우저에 유지됩니다)')) return;
   clearToken(); localStorage.removeItem(LS.USER); localStorage.removeItem(LS.LOGGED_BEFORE);
@@ -195,9 +199,61 @@ function headerRow(spec) {
     }))
   };
 }
+function grantedSheetPermission() {
+  try {
+    const saved = localStorage.getItem(LS.GRANTED_SCOPES);
+    if (saved === null) return null; // Older logins: let the API verify, do not invent a denial.
+    const scopes = JSON.parse(saved);
+    if (!Array.isArray(scopes)) return null;
+    return ['drive.file','drive','spreadsheets'].some(name => scopes.includes('https://www.googleapis.com/auth/' + name));
+  } catch { return null; }
+}
+function sheetCreationIssue(status, data = {}) {
+  const error = data.error || data;
+  const reasons = [...(error.errors || []).map(e => e.reason), ...(error.details || []).map(e => e.reason)].filter(x => typeof x === 'string');
+  const tag = reasons.join(' ') + ' ' + String(error.status || '') + ' ' + String(error.message || '');
+  let kind = 'unknown', title = '새 스프레드시트를 만들지 못했습니다.', action = '아래 진단 내용을 앱 관리자에게 전달해 주세요. 403만으로는 원인을 확정할 수 없습니다.';
+  if (status === 401) { kind='auth'; title='Google 로그인이 만료되었거나 유효하지 않습니다.'; action='다시 로그인한 뒤 시트를 만들어 주세요.'; }
+  else if (/SERVICE_DISABLED|API_DISABLED|accessNotConfigured/i.test(tag)) { kind='service'; title='앱의 Google API가 사용 설정되어 있지 않습니다.'; action='앱 관리자가 이 OAuth 프로젝트의 Google Sheets API 사용 설정을 확인해야 합니다. 선생님마다 별도 프로젝트를 만들 필요는 없습니다.'; }
+  else if (/ACCESS_TOKEN_SCOPE_INSUFFICIENT|insufficientPermissions|insufficient authentication scopes/i.test(tag)) { kind='scope'; title='로그인은 되었지만 시트를 만들 권한이 허용되지 않았습니다.'; action='아래 버튼으로 Google 권한 안내를 다시 열고, 이 앱이 사용하는 Drive 파일 접근 권한을 허용해 주세요.'; }
+  else if (/domainPolicy|ORG_RESTRICTION|ORG_POLICY|admin_policy/i.test(tag)) { kind='policy'; title='학교·기관의 Google 계정 정책으로 요청이 차단되었습니다.'; action='학교 Google Workspace 관리자에게 앱의 Drive·Sheets 사용 허용 여부를 확인해 주세요.'; }
+  else if (/storageQuotaExceeded/i.test(tag)) { kind='storage'; title='Google Drive 저장 공간이 부족합니다.'; action='사용 중인 Google 계정의 Drive 저장 공간을 확인해 주세요.'; }
+  else if (status === 429 || /rateLimitExceeded|userRateLimitExceeded|quotaExceeded|RESOURCE_EXHAUSTED/i.test(tag)) { kind='quota'; title='Google API 요청 한도에 도달했습니다.'; action='잠시 뒤 다시 시도해 주세요. 반복되면 앱 관리자가 프로젝트의 API 할당량을 확인해야 합니다.'; }
+  else if (status >= 500) { kind='temporary'; title='Google 서비스에서 일시적인 오류가 발생했습니다.'; action='Drive에 새 시트가 생겼는지 먼저 확인한 뒤 다시 시도해 주세요. 자동으로 재요청하지 않았습니다.'; }
+  else if (status === 400) { kind='request'; title='Google이 시트 생성 요청을 처리하지 못했습니다.'; action='앱 관리자가 아래 요청 오류를 확인해야 합니다.'; }
+  return {kind,title,action,http:status || 0,status:String(error.status || ''),reasons,message:String(error.message || ''),fields:(error.details || []).flatMap(e => (e.fieldViolations || []).map(v => String(v.field || '')))};
+}
+function renderSheetCreationIssue(issue) {
+  // Copy only diagnostic codes. Never include the access token, account or response body.
+  const safeMessage = v => {
+    let text = String(v || '');
+    const secrets = [state.token];
+    try { secrets.push(getGeminiKey(), getPickerKey()); } catch {}
+    for (const secret of secrets) if (secret) text = text.split(secret).join('[인증정보 제외]');
+    return text.replace(/Bearer\s+\S+/gi,'Bearer [제외]').replace(/https?:\/\/[^\s<>]+/g,'[주소 제외]').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[이메일 제외]').replace(/[A-Za-z0-9_-]{40,}/g,'[식별자 제외]').slice(0,1500);
+  };
+  const safeCode = v => String(v || '').replace(/[^a-zA-Z0-9_ .:()[\]\/-]/g, '').slice(0,180);
+  createNewSheet.diagnostic = ['essay-grading 4.1.2', '단계: 새 스프레드시트 생성', 'HTTP: ' + (issue.http || '요청 전/응답 없음'), '상태: ' + safeCode(issue.status), '분류: ' + safeCode(issue.kind), '이유: ' + issue.reasons.map(safeCode).join(', '), '필드: ' + issue.fields.map(safeCode).join(', '), 'Google 설명: ' + safeMessage(issue.message), '시트 생성 권한: ' + ({true:'허용 기록 있음',false:'미허용',null:'이전 로그인 · 확인 필요'})[String(grantedSheetPermission())]].join('\n');
+  $('connect-status').innerHTML = `<div class="info-box" role="alert"><strong>${escapeHtml(issue.title)}</strong><p>${escapeHtml(issue.action)}</p>${['scope','auth','unknown'].includes(issue.kind)?`<button class="btn btn-primary" onclick="login(false, true)">Google 로그인·파일 권한 다시 확인</button>`:''}<details style="margin-top:12px"><summary>진단 내용 (계정·키 제외)</summary><pre style="white-space:pre-wrap">${escapeHtml(createNewSheet.diagnostic)}</pre><button class="btn btn-secondary" onclick="copySheetCreationDiagnostic()">진단 내용 복사</button></details></div>`;
+}
+async function copySheetCreationDiagnostic() {
+  try { await navigator.clipboard.writeText(createNewSheet.diagnostic || ''); showToast('진단 내용을 복사했습니다.'); }
+  catch { showToast('진단 내용을 펼쳐 선택한 뒤 복사해 주세요.'); }
+}
 async function createNewSheet() {
+  if (createNewSheet.busy) return;
+  createNewSheet.busy = true;
+  document.querySelectorAll('#connect-screen .choice-card').forEach(e => { e.disabled = true; });
+  let createdId = '', requestSent = false;
   $('connect-status').innerHTML = '<span class="spinner"></span>새 스프레드시트를 만드는 중...';
   try {
+    const exp = Number(localStorage.getItem(LS.TOKEN_EXP));
+    if (!state.token || (exp && Date.now() >= exp)) {
+      renderSheetCreationIssue(sheetCreationIssue(401)); return;
+    }
+    if (grantedSheetPermission() === false) {
+      renderSheetCreationIssue(sheetCreationIssue(403,{error:{status:'PERMISSION_DENIED',details:[{reason:'ACCESS_TOKEN_SCOPE_INSUFFICIENT'}]}})); return;
+    }
     const body = {
       properties: { title: CONFIG.SHEET_TITLE, locale: 'ko_KR', timeZone: 'Asia/Seoul' },
       sheets: SHEET_SPECS.map((spec, i) => ({
@@ -205,15 +261,30 @@ async function createNewSheet() {
         data: [{ startRow: 0, startColumn: 0, rowData: [headerRow(spec)] }]
       }))
     };
+    requestSent = true;
     const res = await authFetch('https://sheets.googleapis.com/v4/spreadsheets', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
-    if (!res.ok) throw new Error('시트 생성 실패 (' + res.status + '): ' + (await res.text()).slice(0, 200));
+    if (!res.ok) {
+      let data = {}; try { data = await res.json(); } catch {}
+      renderSheetCreationIssue(sheetCreationIssue(res.status,data)); return;
+    }
     const ss = await res.json();
-    state.sheetId = ss.spreadsheetId; localStorage.setItem(LS.SHEET_ID, ss.spreadsheetId);
+    if (!ss.spreadsheetId) throw new Error('생성 응답에 시트 ID가 없습니다.');
+    createdId = ss.spreadsheetId; state.sheetId = createdId;
+    state.sheetIds = Object.fromEntries((ss.sheets || []).map(s => [s.properties.title,s.properties.sheetId]));
+    localStorage.setItem(LS.SHEET_ID, createdId);
     showToast('새 스프레드시트를 만들었습니다');
     showApp();
-  } catch (e) { $('connect-status').innerHTML = '⚠ ' + escapeHtml(e.message); }
+  } catch (e) {
+    if (createdId) {
+      $('connect-status').innerHTML = `<div class="info-box" role="alert"><strong>시트는 생성되었지만 앱 연결을 완료하지 못했습니다.</strong><p>새로 만들기를 반복하지 마세요. 아래 주소를 보관하고 기존 시트로 연결할 수 있습니다.</p><a href="https://docs.google.com/spreadsheets/d/${encodeURIComponent(createdId)}" target="_blank" rel="noopener">생성된 스프레드시트 열기</a><p><button class="btn btn-primary" onclick="showApp()">이 시트로 계속하기</button></p></div>`;
+    } else if (e.status === 401) renderSheetCreationIssue(sheetCreationIssue(401));
+    else renderSheetCreationIssue({kind:'network',title:requestSent?'시트 생성 응답을 확인하지 못했습니다.':'브라우저의 연결 정보를 읽지 못했습니다.',action:requestSent?'인터넷 연결을 확인하고 Drive에 새 시트가 만들어졌는지 먼저 확인해 주세요. 중복 생성을 막기 위해 자동 재요청하지 않았습니다.':'브라우저의 사이트 저장소 사용이 허용되어 있는지 확인해 주세요.',http:0,status:'',reasons:[],fields:[]});
+  } finally {
+    createNewSheet.busy = false;
+    document.querySelectorAll('#connect-screen .choice-card').forEach(e => { e.disabled = false; });
+  }
 }
 
 // 연결된 시트에 탭/헤더가 부족하면 보완 (Apps Script의 migrateSheet_와 같은 역할)

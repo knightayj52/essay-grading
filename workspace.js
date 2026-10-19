@@ -12,7 +12,7 @@ const originalAuthFetch=authFetch;
 authFetch=async function(url,options={}){
   if(workspace.demo)throw Error('샘플에서는 Google 요청을 보내지 않습니다.');
   const res=await fetch(url,{...options,headers:{...(options.headers||{}),Authorization:'Bearer '+state.token}});
-  if(res.status===401){captureDrafts();throw Error('Google 로그인이 만료되었습니다. 작성 내용은 임시저장됩니다. 상단의 다시 로그인 버튼을 눌러 주세요.');}
+  if(res.status===401){captureDrafts();const error=Error('Google 로그인이 만료되었습니다. 작성 내용은 임시저장됩니다. 상단의 다시 로그인 버튼을 눌러 주세요.');error.status=401;throw error;}
   return res;
 };
 async function atomicReplace(changes){

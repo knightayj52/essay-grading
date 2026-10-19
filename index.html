@@ -243,7 +243,7 @@
     footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px 16px 32px; }
     footer a { color: var(--muted); }
   </style>
-<link rel="stylesheet" href="workspace.css?v=4.1.1">
+<link rel="stylesheet" href="workspace.css?v=4.1.2">
 </head>
 <body>
 
@@ -286,18 +286,18 @@
     <h2>채점 데이터를 저장할 스프레드시트를 연결하세요</h2>
     <p>평가·루브릭·학생 명단·채점 결과가 모두 이 스프레드시트에 저장됩니다.<br>Apps Script 버전을 쓰셨다면 <strong>그 스프레드시트를 그대로 연결</strong>하면 기존 데이터가 이어집니다.</p>
     <div class="choice-grid" style="text-align:left;">
-      <div class="choice-card" onclick="showSheetConnectionOptions()">
+      <button type="button" class="choice-card" onclick="showSheetConnectionOptions()">
         <div class="ci">📂</div>
         <strong>기존 스프레드시트 연결</strong>
         <span>Apps Script 버전에서 쓰던 "서술형평가 채점 시스템" 시트를 고릅니다. 부족한 탭·열은 자동으로 보완됩니다.</span>
-      </div>
-      <div class="choice-card" onclick="createNewSheet()">
+      </button>
+      <button type="button" class="choice-card" onclick="createNewSheet()">
         <div class="ci">✨</div>
         <strong>새 스프레드시트 만들기</strong>
         <span>내 Drive에 "서술형평가 채점 시스템" 시트를 새로 만들고 필요한 데이터 탭을 자동 생성합니다.</span>
-      </div>
+      </button>
     </div>
-    <div id="connect-status" class="helper" style="margin-top:16px;"></div>
+    <div id="connect-status" role="status" aria-live="polite" class="helper" style="margin-top:16px;"></div>
   </div>
 </section>
 
@@ -468,13 +468,13 @@
 <div id="modal-overlay" class="modal-overlay"><div class="modal" id="modal-box" role="dialog" aria-modal="true" aria-label="평가 편집 및 안내" tabindex="-1"></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="core.js?v=4.1.1"></script>
-<script src="app.js?v=4.1.1"></script>
-<script src="workspace.js?v=4.1.1"></script>
-<script src="grading.js?v=4.1.1"></script>
+<script src="core.js?v=4.1.2"></script>
+<script src="app.js?v=4.1.2"></script>
+<script src="workspace.js?v=4.1.2"></script>
+<script src="grading.js?v=4.1.2"></script>
 <script src="https://apis.google.com/js/api.js" async defer onload="onGapiLoaded()"></script>
-<script src="quality-core.js?v=4.1.1"></script>
-<script src="quality-test.js?v=4.1.1"></script>
-<script src="boot.js?v=4.1.1"></script>
+<script src="quality-core.js?v=4.1.2"></script>
+<script src="quality-test.js?v=4.1.2"></script>
+<script src="boot.js?v=4.1.2"></script>
 </body>
 </html>
