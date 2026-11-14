@@ -5,6 +5,7 @@
 const CONFIG = {
   CLIENT_ID: '522445423766-m3cop5vh489598e0hkefumd0r202tncp.apps.googleusercontent.com',   // OAuth 2.0 클라이언트 ID (웹 애플리케이션)
   APP_ID:    '522445423766',                          // Google Cloud 프로젝트 번호 (Picker가 drive.file로 접근하려면 필요)
+  PICKER_KEY: 'AIzaSyDuMaSWfi7yfybCUJnUvghOcirBA5JzXoE',   // Google Picker용 브라우저 키 (공개되어도 되는 키 — Cloud 콘솔에서 knightayj52.github.io로 리퍼러 제한)
   SCOPES:    'https://www.googleapis.com/auth/drive.file',
   SHEET_TITLE: '서술형평가 채점 시스템'
 };
@@ -33,11 +34,11 @@ const SHEET_SPECS = [
 /* ============================================================
    AI 모델 / 속도 (영쌤클래스 Gemini 모델 표준)
    ============================================================ */
-const MODELS = [
-  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash (권장 · 품질과 비용 균형)', desc: '가장 유능한 Flash 모델. 추론 단계가 있어 채점 정확도가 높고, 비용은 Pro의 1/4 수준입니다.' },
-  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (최신 · 검증 강화)', desc: '어려운 판단에서 스스로 검증 단계를 더 밟습니다. 토큰을 더 쓰지만 신뢰도가 중요할 때 좋습니다.' },
-  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite (저비용 · 무료 한도 넉넉)', desc: '가장 비용 효율적. 무료 API로 학생 수가 많을 때 권장. 품질은 Flash보다 약간 낮습니다.' },
-  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (최고 추론 · 고비용)', desc: '순수 추론 능력 최고. 소수 학생 정밀 채점이나 기준 검증용으로 적합합니다.' }
+const MODELS = [   // 순서 = 화면의 추천 순서 (추천 / 신뢰도 우선 / 무료·저비용 / 정밀·고비용)
+  { id: 'gemini-3.7-flash', name: 'Gemini 3.7 Flash', desc: '대부분의 채점에 알맞습니다. 품질과 비용의 균형이 가장 좋습니다.' },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', desc: '판정이 까다로운 문항에서 스스로 한 번 더 확인합니다. 조금 느리고 비용이 더 듭니다.' },
+  { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', desc: '무료 키로 학생이 많을 때 좋습니다. 품질은 Flash보다 약간 낮습니다.' },
+  { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', desc: '가장 정밀하지만 느리고 비쌉니다. 몇 명만 다시 확인할 때 쓰세요.' }
 ];
 const SPEEDS = [
   { id: 'turbo', name: '연속 처리 (유료 API)', desc: '순차 처리하며 학생 사이에 추가 대기하지 않습니다. 한도 오류 시 자동 대기합니다.' },
@@ -233,7 +234,7 @@ function renderSheetCreationIssue(issue) {
     return text.replace(/Bearer\s+\S+/gi,'Bearer [제외]').replace(/https?:\/\/[^\s<>]+/g,'[주소 제외]').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[이메일 제외]').replace(/[A-Za-z0-9_-]{40,}/g,'[식별자 제외]').slice(0,1500);
   };
   const safeCode = v => String(v || '').replace(/[^a-zA-Z0-9_ .:()[\]\/-]/g, '').slice(0,180);
-  createNewSheet.diagnostic = ['essay-grading 4.1.2', '단계: 새 스프레드시트 생성', 'HTTP: ' + (issue.http || '요청 전/응답 없음'), '상태: ' + safeCode(issue.status), '분류: ' + safeCode(issue.kind), '이유: ' + issue.reasons.map(safeCode).join(', '), '필드: ' + issue.fields.map(safeCode).join(', '), 'Google 설명: ' + safeMessage(issue.message), '시트 생성 권한: ' + ({true:'허용 기록 있음',false:'미허용',null:'이전 로그인 · 확인 필요'})[String(grantedSheetPermission())]].join('\n');
+  createNewSheet.diagnostic = ['essay-grading 4.1.3', '단계: 새 스프레드시트 생성', 'HTTP: ' + (issue.http || '요청 전/응답 없음'), '상태: ' + safeCode(issue.status), '분류: ' + safeCode(issue.kind), '이유: ' + issue.reasons.map(safeCode).join(', '), '필드: ' + issue.fields.map(safeCode).join(', '), 'Google 설명: ' + safeMessage(issue.message), '시트 생성 권한: ' + ({true:'허용 기록 있음',false:'미허용',null:'이전 로그인 · 확인 필요'})[String(grantedSheetPermission())]].join('\n');
   $('connect-status').innerHTML = `<div class="info-box" role="alert"><strong>${escapeHtml(issue.title)}</strong><p>${escapeHtml(issue.action)}</p>${['scope','auth','unknown'].includes(issue.kind)?`<button class="btn btn-primary" onclick="login(false, true)">Google 로그인·파일 권한 다시 확인</button>`:''}<details style="margin-top:12px"><summary>진단 내용 (계정·키 제외)</summary><pre style="white-space:pre-wrap">${escapeHtml(createNewSheet.diagnostic)}</pre><button class="btn btn-secondary" onclick="copySheetCreationDiagnostic()">진단 내용 복사</button></details></div>`;
 }
 async function copySheetCreationDiagnostic() {
