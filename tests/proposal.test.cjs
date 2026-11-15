@@ -30,3 +30,31 @@ test('machine check catches missing levels and copy/print text holds no answers'
   assert.equal(P.validateProposal(p,s,G).issues.length,2);
   const sheet=P.sheetText(sample(s),s,4),rub=P.rubricText(sample(s),s);
   assert.ok(sheet.includes('(1-1) 까닭을 쓰시오.')&&!sheet.includes('왜냐하면 그렇기'));assert.ok(rub.includes('상(3점): 둘 다 씀')&&rub.includes(s.c));});
+const sumFix=require('./fixtures-summative.cjs');
+const SS=S.filter(s=>/\[4사0[89]-0[12]\]|\[4사10-01\]/.test(s.c));
+test('summative points always add up to the total and follow element counts',()=>{
+  assert.deepEqual(P.allocatePoints([2,3,3],100),[30,35,35]);
+  for(const total of [50,60,90,100,120])for(const counts of [[2,2],[3,3],[2,3,3],[3,2,2,3],[2,2,2,2,3]])assert.equal(P.allocatePoints(counts,total).reduce((a,b)=>a+b,0),total);
+  for(const pts of [15,20,25,30,35,40,50]){const l=P.levelsFor({points:pts,elements:[{slot:'a',name:'a',accept:['x']},{slot:'b',name:'b',accept:['y']}]}).map(x=>x.score);assert.ok(l[0]===pts&&l[0]>l[1]&&l[1]>l[2]&&l[2]>0,pts+':'+l);}});
+test('summative prompts list every chosen standard and the count-based grading rule',()=>{
+  assert.equal(SS.length,5);const opt={standards:SS,guide:G,selected:P.mergeCases(SS,K,3),grade:4,questionCount:3,total:100,teacherNote:'가상 지역으로'};
+  const o=P.buildSummativeOutlinePrompt(opt),f=P.buildSummativePrompt({...opt,outline:{title:'구성 가',questions:[{label:'1',standards:['[4사08-01]'],elements:['모습','좋은 점']}]}});
+  for(const s of SS)assert.ok(o.includes(s.c)&&f.includes(s.c));
+  assert.ok(o.includes('"outlines"')&&o.includes('3문항, 100점 만점')&&o.includes('갖춘 요소의 개수')&&o.includes('가상 지역으로'));assert.ok(f.includes('구성 가')&&f.includes('"accept"'));
+  assert.ok(opt.selected.length>0&&opt.selected.every(x=>x.c.subject==='사회'));});
+test('a summative proposal becomes three 100-point questions the grading core accepts',()=>{
+  const p=P.normalizeSummative(sumFix(),100);assert.deepEqual(p.questions.map(q=>q.points),[30,35,35]);
+  assert.deepEqual(P.validateSummative(p,SS,{questionCount:3}).issues,[]);
+  const {data,rubrics}=P.summativeToEvaluation(p,SS,4);
+  assert.equal(data.questionCount,3);assert.deepEqual(data.questions.map(q=>[q.group,q.sub]),[[1,0],[2,0],[3,0]]);
+  assert.ok(data.questions[1].content.includes('세워진 차 | 21대')&&data.questions[1].content.includes('[답란 칸] 원인 / 해결 방안 / 까닭'));
+  assert.equal(rubrics.reduce((a,r)=>a+r.rubric[0].scales[0].score,0),100);
+  for(const r of rubrics){assert.equal(C.validateRubric(r.rubric),true);assert.equal(r.rubric.length,1);}
+  assert.deepEqual(rubrics[1].rubric[0].scales.map(x=>x.score),[35,25,10]);assert.ok(rubrics[1].rubric[0].scales[0].criterion.includes('인정: 내려 줄 곳이 없음 / 주차장이 멂'));
+  p.questions[0].points=45;P.normalizeSummative(p,100);assert.equal(p.questions[0].points,45,'교사가 고친 배점은 유지');assert.equal(P.validateSummative(p,SS).issues.length,1);});
+test('summative check flags vague wording, wrong element counts and uncovered standards',()=>{
+  const p=P.normalizeSummative(sumFix(),100);p.questions[2].elements.splice(1);p.questions[1].elements[0].accept=['원인을 구체적으로 씀'];p.questions[0].standards=['[4사08-01]'];
+  const v=P.validateSummative(p,SS,{questionCount:3});
+  assert.ok(v.issues.some(x=>x.includes('채점 요소가 1개')));assert.ok(v.warn.some(x=>x.includes('정도 표현')));assert.ok(v.warn.some(x=>x.includes('[4사08-02]')));
+  const sheet=P.summativeSheetText(P.normalizeSummative(sumFix(),100),SS,4),rub=P.summativeRubricText(P.normalizeSummative(sumFix(),100),SS);
+  assert.ok(sheet.includes('[35점]')&&sheet.includes('원인:')&&!sheet.includes('내려 주는 곳을 만든다'));assert.ok(rub.includes('상 3개 모두 (35점) / 중 2개 (25점) / 하 1개 이하 (10점)'));});

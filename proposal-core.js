@@ -286,6 +286,202 @@ ${g.review_checklist.rubric.map(x => '- ' + x).join('\n')}`);
     return L.join('\n').trim() + '\n';
   }
 
+  /* ============================================================
+     총괄평가 — 성취기준 여러 개, 문항당 답란 하나, 갖춘 요소 개수로 판정
+     ============================================================ */
+  const round5 = x => Math.max(5, Math.round(x / 5) * 5);
+  function mergeCases(stds, cases, max) {
+    const seen = new Set(), out = [];
+    const lists = stds.map(s => selectCases(s, cases, 2));
+    for (let i = 0; i < 2; i++) lists.forEach(l => { const x = l[i]; if (x && !seen.has(x.c.id) && out.length < (max || 3)) { seen.add(x.c.id); out.push(x); } });
+    return out;
+  }
+  function stdsText(stds) { return stds.map(s => `- ${s.c} (${s.a || ''}): ${s.t}\n   A: ${s.A}\n   B: ${s.B}\n   C: ${s.C}`).join('\n'); }
+  const OBJECTIVE_RULES = `- 문항 하나에 **답란은 한 덩어리**이고, 그 안에 이름표가 인쇄된 칸이 2~3개 있습니다(예: "원인", "해결 방안", "그 방안이 알맞은 까닭"). 소문항(1-1, 1-2)으로 쪼개지 않습니다.
+- 칸 하나가 **채점 요소 하나**입니다. 문항마다 채점 요소는 2개 또는 3개입니다.
+- 수준은 **갖춘 요소의 개수**로만 정합니다(전부 갖춤=상, 하나 모자람=중, 그 이하=하). 그래서 요소 하나하나는 "갖췄다/못 갖췄다"가 분명히 갈려야 합니다. "구체적으로", "충분히", "적절하게", "논리적으로" 같은 정도 표현으로 요소를 정의하지 마세요.
+- 요소마다 **인정하는 답 목록**(accept)을 3~5개 적습니다. 채점자는 답안이 이 목록의 어느 하나와 뜻이 같은지만 봅니다. 자료에서 찾는 요소는 자료에서 나올 수 있는 답을 빠짐없이 적고, 생각을 쓰는 요소는 "무엇이 들어 있으면 인정하는지"를 내용 조건으로 적습니다(예: "이용 방법 안에 주민의 생활과 자연이 둘 다 들어감").
+- 요소마다 **인정하지 않는 답**(reject)을 1~2개 적습니다(흔한 오답, 원인 대신 결과를 쓴 답, 자료를 그대로 옮긴 답 등).
+- 채점에 쓰는 요구는 **학생에게 조건으로 알려 줍니다**(예: "까닭에는 자료에 나온 내용을 넣어 쓸 것."). 조건은 문항당 0~2개.
+- 서로 다른 문항이 같은 사고를 되풀이하지 않게 하세요(예: 한 문항은 설명, 한 문항은 제안, 한 문항은 양쪽을 따져 판단).
+- 태도·실천 의지처럼 답안지로 확인할 수 없는 것은 묻지 않습니다.
+- 자료는 문항마다 따로, 교사가 그대로 인쇄할 수 있는 글·표·대화로 씁니다. 실제 지명·통계 대신 가상의 이름("가람 마을", "○○동")을 쓰고, 수업에서 배운 사례를 외워 쓰면 풀리는 자료는 피합니다.`;
+
+  function summativeHead(opt, what) {
+    const stds = opt.standards, g = opt.guide, band = bandOf(stds[0]), gb = g.grade_bands[band] || {}, sj = g.subjects[stds[0].s] || {};
+    const P = [];
+    P.push(`당신은 한국 초등학교 교사를 돕는 평가 전문가입니다. 교사가 고른 2022 개정 교육과정 성취기준 ${stds.length}개를 묶어 보는 **서·논술형 총괄평가**(${opt.questionCount}문항, ${opt.total}점 만점)의 ${what}. 이 평가는 AI 채점 도구로 채점하므로 **누가 채점해도 같은 결과가 나오는 문항**이어야 합니다.`);
+    P.push(`\n## 1. 성취기준 (${stds[0].s} ${band}${opt.grade ? ', ' + opt.grade + '학년 실시' : ''})\n` + stdsText(stds) + (opt.teacherNote ? `\n- 교사가 덧붙인 말(가능한 한 반영하세요): ${opt.teacherNote}` : ''));
+    P.push('\n## 2. 이 학년군·교과의 문항 수준\n' + `- 자료: ${gb.materials || ''}\n- 답안 분량: ${gb.answer_length || ''}` + (sj.what ? `\n- ${stds[0].s}과에서 평가하는 것: ${sj.what}\n- 전형적인 흐름: ${sj.typical || ''}` : ''));
+    P.push('\n## 3. 문항 형식 (반드시 지키세요)\n' + OBJECTIVE_RULES +
+      `\n- 문항은 정확히 ${opt.questionCount}개입니다. 성취기준 ${stds.length}개를 빠짐없이 다루되, 한 문항이 관련 있는 성취기준 1~2개를 맡습니다. 답안지로 볼 수 없는 부분은 not_covered에 적습니다.\n- 전체가 A4 ${opt.questionCount <= 2 ? '1' : '2'}쪽 안에 들어가야 합니다. 칸 하나의 답은 1~3줄입니다.`);
+    const sel = opt.selected || [];
+    if (sel.length) P.push('\n## 4. 참고 사례 (자료와 요구의 구조만 참고합니다. 소재·문항을 그대로 쓰지 마세요. 사례의 소문항 구성과 4단계 채점은 따르지 않습니다)\n' + sel.map(compactCase).join('\n\n'));
+    return P;
+  }
+  function buildSummativeOutlinePrompt(opt) {
+    const n = opt.count || 2, P = summativeHead(opt, `**구성안 ${n}개**를 제안하세요. 교사가 하나를 고르면 그때 완성본을 만듭니다. 지금은 자료 본문·예시 답안을 쓰지 말고 구성만 짧게 씁니다`);
+    P.push(`\n## 5. 출력 (JSON만 출력하세요)
+- 구성안 ${n}개는 성취기준을 문항에 나누는 방법이나 자료의 소재·형태가 서로 달라야 합니다.
+{
+  "outlines": [
+    {
+      "title": "평가 이름",
+      "plan": "성취기준을 문항에 어떻게 나누었는지 한 문장",
+      "questions": [
+        {"label": "1", "standards": ["이 문항이 맡는 성취기준 코드"], "thinking": "요구하는 사고 (예: 설명, 제안, 판단)", "material_idea": "어떤 자료를 줄지 한 문장", "elements": ["답란 칸 이름 = 채점 요소 (2~3개)"]}
+      ],
+      "not_covered": "답안지로 볼 수 없어 뺀 부분 (없으면 빈 문자열)",
+      "difference": "다른 구성안과 무엇이 다른지 한 문장",
+      "time_minutes": 40
+    }
+  ]
+}`);
+    return P.join('\n');
+  }
+  function summativeOutlineText(o) {
+    const L = ['- 평가 이름: ' + (o.title || ''), '- 구성: ' + (o.plan || '')];
+    (o.questions || []).forEach(q => L.push(`- 문항 ${q.label} [${(q.standards || []).join(', ')}] 사고: ${q.thinking || ''} / 자료: ${q.material_idea || ''} / 답란 칸: ${(q.elements || []).join(' · ')}`));
+    return L.join('\n');
+  }
+  function buildSummativePrompt(opt) {
+    const P = summativeHead(opt, '**완성본 1개**를 만드세요. 교사가 읽고 고쳐 쓸 초안입니다');
+    P.push('\n## 5. 교사가 고른 구성안 (이 구성을 따르되, 3번 형식에 어긋나는 부분은 고치고 무엇을 고쳤는지 self_check.concerns에 적으세요)\n' + summativeOutlineText(opt.outline || {}));
+    P.push(`\n## 6. 출력 (JSON만 출력하세요. 배점과 상·중·하 판정 문장은 앱이 요소 개수로 자동으로 만드니 쓰지 않습니다)
+{
+  "title": "평가 이름",
+  "plan": "성취기준을 문항에 어떻게 나누었는지 한 문장",
+  "not_covered": "성취기준 가운데 이 평가로 볼 수 없는 부분 (없으면 빈 문자열)",
+  "time_minutes": 40,
+  "questions": [
+    {
+      "label": "1",
+      "standards": ["이 문항이 맡는 성취기준 코드"],
+      "eval_element": "평가 요소 ('~하기' 꼴)",
+      "material": {"intro": "자료 위 지시문 (예: 다음 글을 읽고 물음에 답하시오.)", "text": "학생에게 인쇄할 자료 본문 전체 (표는 줄바꿈과 | 로)", "picture_note": ""},
+      "prompt": "학생에게 인쇄할 발문 (예: ~을 보고 다음 세 가지를 쓰시오.)",
+      "conditions": ["'~할 것.' 꼴 (0~2개)"],
+      "elements": [
+        {"slot": "답란 칸에 인쇄할 이름표 (예: 원인 (1가지))", "lines": 2, "name": "채점 요소 이름", "accept": ["인정하는 답 3~5개"], "reject": ["인정하지 않는 답 1~2개"]}
+      ],
+      "model_answer": ["칸마다 예시 답안 하나씩 (elements와 같은 순서, 학생이 쓸 만한 문장)"],
+      "feedback": {"상": "모두 갖춘 학생에게 줄 말", "중": "하나 모자란 학생에게 줄 말", "하": "그 이하인 학생에게 줄 말"},
+      "grading_notes": ["채점 시 유의점 (예: 두 칸에 같은 내용을 쓰면 한 번만 인정)"]
+    }
+  ],
+  "level_profile": {"A": "A 수준 학생이 이 평가에서 보일 수행", "B": "", "C": ""},
+  "self_check": {"passed": ["점검해 통과한 항목"], "concerns": ["교사가 확인할 점"]},
+  "limits": "이 평가안의 한계"
+}
+
+출력 전에 점검하세요: (1) 모든 요소가 '갖췄다/못 갖췄다'로 갈리는가 (2) 인정 답 목록만 보고 채점할 수 있는가 (3) 예시 답안이 자료 문장을 그대로 옮긴 것이 아닌가 (4) 문항끼리 같은 것을 되풀이해 묻지 않는가 (5) 자료만 읽으면 누구나 풀 수 있고, 자료 없이 외운 지식만으로는 풀 수 없는가.`);
+    return P.join('\n');
+  }
+  /* 배점: 총점을 문항 수로 나눠 5점 단위로, 남는 점수는 요소가 많은 문항부터 */
+  function allocatePoints(counts, total) {
+    const n = counts.length; if (!n) return [];
+    const base = Math.floor(total / n / 5) * 5, pts = counts.map(() => base);
+    let rem = total - base * n;
+    const order = counts.map((c, i) => i).sort((a, b) => counts[b] - counts[a] || b - a);
+    for (let k = 0; rem >= 5; k++, rem -= 5) pts[order[k % n]] += 5;
+    pts[order[0]] += rem;
+    return pts;
+  }
+  function levelsFor(q) {
+    const k = (q.elements || []).length, P = Number(q.points) || 0, fb = q.feedback || {};
+    const mid = Math.min(P - 5, round5(P * 0.7)), low = Math.min(mid - 5, round5(P * 0.3));
+    const list = (q.elements || []).map((e, i) => `요소${i + 1} [${e.slot || e.name}] ${e.name || ''}\n  인정: ${(e.accept || []).join(' / ')}` + ((e.reject || []).length ? `\n  불인정: ${e.reject.join(' / ')}` : '')).join('\n');
+    return [
+      { level: '상', score: P, criterion: `아래 요소 ${k}개를 모두 갖춤.\n${list}`, feedback: fb['상'] || '' },
+      { level: '중', score: mid, criterion: `위 요소 ${k}개 가운데 ${k - 1}개만 갖춤.`, feedback: fb['중'] || '' },
+      { level: '하', score: low, criterion: k > 2 ? `위 요소 가운데 ${k - 2}개 이하만 갖춤 (틀린 답, 자료와 무관한 답 포함).` : '위 요소를 하나도 갖추지 못함 (틀린 답, 자료와 무관한 답 포함).', feedback: fb['하'] || '' }
+    ];
+  }
+  function normalizeSummative(p, total) {
+    p.mode = 'summative'; p.total = total;
+    p.questions = (p.questions || []).filter(q => q && q.prompt);
+    p.questions.forEach((q, i) => {
+      q.label = String(q.label || i + 1); q.material = q.material || { intro: '', text: '', picture_note: '' }; q.conditions = (q.conditions || []).filter(Boolean);
+      q.elements = (q.elements || []).map(e => ({ slot: e.slot || e.name || '', lines: Math.min(5, Math.max(1, Number(e.lines) || 2)), name: e.name || e.slot || '', accept: (e.accept || []).filter(Boolean), reject: (e.reject || []).filter(Boolean) }));
+      if (!Array.isArray(q.model_answer)) q.model_answer = q.model_answer ? [String(q.model_answer)] : [];
+      q.page = q.page || 1;
+    });
+    const pts = allocatePoints(p.questions.map(q => q.elements.length), total);
+    p.questions.forEach((q, i) => { if (!(Number(q.points) > 0) || p._alloc !== true) q.points = pts[i]; });
+    p._alloc = true;
+    return p;
+  }
+  function validateSummative(p, stds, opt) {
+    const issues = [], warn = [], norm = s => String(s || '').replace(/\s+/g, '');
+    if (!p || !Array.isArray(p.questions) || !p.questions.length) return { issues: ['문항이 없습니다'], warn };
+    const codes = stds.map(s => s.c), used = new Set();
+    const sum = p.questions.reduce((a, q) => a + (Number(q.points) || 0), 0);
+    if (sum !== Number(p.total)) issues.push(`배점 합계가 ${sum}점입니다 (${p.total}점이어야 합니다)`);
+    if (opt && opt.questionCount && p.questions.length !== opt.questionCount) warn.push(`문항이 ${p.questions.length}개입니다 (요청은 ${opt.questionCount}개)`);
+    p.questions.forEach(q => {
+      const tag = '[' + q.label + '번] ';
+      (q.standards || []).forEach(c => { if (codes.includes(c)) used.add(c); else warn.push(tag + '고르지 않은 성취기준 ' + c + '가 적혀 있습니다'); });
+      if (!q.prompt) issues.push(tag + '발문이 없습니다');
+      const k = (q.elements || []).length;
+      if (k < 2 || k > 3) issues.push(tag + `채점 요소가 ${k}개입니다 (2~3개여야 개수로 상·중·하를 가를 수 있습니다)`);
+      if (!(Number(q.points) >= 15)) issues.push(tag + '배점이 15점보다 작으면 상·중·하 점수를 나눌 수 없습니다');
+      const mat = norm((q.material || {}).text);
+      if (!mat) warn.push(tag + '인쇄할 자료 본문이 없습니다');
+      (q.elements || []).forEach((e, i) => {
+        const et = tag + `요소${i + 1}(${e.name}) `;
+        if (!(e.accept || []).length) issues.push(et + '인정하는 답 목록이 비어 있습니다');
+        if (!e.slot) issues.push(et + '답란 칸 이름이 없습니다');
+        if (/구체적|충분히|적절|논리적|타당|자세히|풍부/.test((e.accept || []).join(' ') + e.name)) warn.push(et + "'구체적으로·적절하게' 같은 정도 표현이 있어 채점이 갈릴 수 있습니다");
+        if (!(q.model_answer || [])[i]) warn.push(et + '예시 답안이 없습니다');
+        const ma = norm((q.model_answer || [])[i]);
+        for (let j = 0; j + 15 <= ma.length; j += 5) if (mat.includes(ma.slice(j, j + 15))) { warn.push(et + '예시 답안이 자료 문장을 그대로 옮긴 부분이 있습니다'); break; }
+      });
+      if ((q.conditions || []).length > 2) warn.push(tag + '조건이 ' + q.conditions.length + '개입니다 (2개 이하 권장)');
+    });
+    codes.filter(c => !used.has(c)).forEach(c => { if (!String(p.not_covered || '').includes(c)) warn.push('성취기준 ' + c + '를 맡은 문항이 없습니다'); });
+    return { issues, warn };
+  }
+  function summativeToEvaluation(p, stds, grade) {
+    const pages = Math.max(1, ...p.questions.map(q => Number(q.page) || 1));
+    const questions = p.questions.map((q, i) => {
+      const cond = q.conditions || [], m = q.material || {};
+      return { number: i + 1, group: i + 1, sub: 0, label: String(i + 1),
+        content: [q.prompt, cond.length ? '<조건>\n' + cond.map(c => '- ' + c).join('\n') : '', '[답란 칸] ' + q.elements.map(e => e.slot).join(' / '), (m.text || '').trim() ? '[제시 자료]\n' + m.text.trim() : ''].filter(Boolean).join('\n\n'),
+        modelAnswer: [q.elements.map((e, k) => `${e.slot}: ${(q.model_answer || [])[k] || ''}`).join('\n'), (q.grading_notes || []).length ? '[채점 유의] ' + q.grading_notes.join(' / ') : ''].filter(Boolean).join('\n'),
+        keyElements: q.elements.map(e => e.name).join(', '), page: Number(q.page) || 1, hint: '이름표가 인쇄된 칸: ' + q.elements.map(e => e.slot).join(', ') };
+    });
+    const rubrics = p.questions.map((q, i) => ({ number: i + 1, rubric: [{ number: 1, name: '갖춘 요소의 수', scales: levelsFor(q).map(l => ({ level: l.level, score: l.score, criterion: l.criterion, feedback: l.feedback })) }] }));
+    const s0 = stds[0];
+    const data = { subject: s0.s, grade: Number(grade) || Number(String(s0.g).charAt(0)) || 1, unit: stds.map(s => s.c).join(' '), name: (p.title || '').trim() || s0.s + ' 총괄평가',
+      scaleType: '3단계', useAI: true, evalType: '다중문항', questions, questionCount: questions.length, pagesPerStudent: pages, gradingMethod: '총점비율', question: '' };
+    return { data, rubrics };
+  }
+  function summativeSheetText(p, stds, grade) {
+    const L = [p.title || '', `${stds[0].s} ${grade ? grade + '학년' : ''}    (   )반 (   )번  이름:        (${p.total}점 만점)`, ''];
+    p.questions.forEach(q => {
+      const m = q.material || {};
+      L.push(`${q.label}. ${m.intro || '다음 자료를 보고 물음에 답하시오.'} [${q.points}점]`); L.push('');
+      if (m.text) { L.push(m.text.trim()); L.push(''); }
+      L.push(q.prompt || '');
+      if ((q.conditions || []).length) { L.push('<조건>'); q.conditions.forEach(c => L.push('  · ' + c)); }
+      q.elements.forEach(e => L.push(`[답란 ${e.lines}줄] ${e.slot}:`)); L.push('');
+    });
+    return L.join('\n').trim() + '\n';
+  }
+  function summativeRubricText(p, stds) {
+    const L = ['[채점 기준] ' + (p.title || '') + ` (${p.total}점 만점)`, '성취기준: ' + stds.map(s => s.c).join(', '), ''];
+    p.questions.forEach(q => {
+      L.push(`■ ${q.label}번 [${q.points}점] ${q.eval_element || ''} ${(q.standards || []).join(' ')}`);
+      q.elements.forEach((e, i) => { L.push(`- 요소${i + 1} ${e.slot} — ${e.name}`); L.push('   예시 답안: ' + ((q.model_answer || [])[i] || '')); L.push('   인정: ' + e.accept.join(' / ')); if (e.reject.length) L.push('   불인정: ' + e.reject.join(' / ')); });
+      const lv = levelsFor(q), k = q.elements.length;
+      L.push(`- 판정: 상 ${k}개 모두 (${lv[0].score}점) / 중 ${k - 1}개 (${lv[1].score}점) / 하 ${k > 2 ? (k - 2) + '개 이하' : '0개'} (${lv[2].score}점)`);
+      (q.grading_notes || []).forEach(n => L.push('- 유의: ' + n)); L.push('');
+    });
+    const lp = p.level_profile || {};
+    if (lp.A) { L.push('■ 성취수준별 수행 특성'); ['A', 'B', 'C'].forEach(k => L.push(`  ${k}: ${lp[k] || ''}`)); }
+    return L.join('\n').trim() + '\n';
+  }
+
   /* ---------- 받은 제안 기계 점검 ---------- */
   function validateProposal(p, std, guide) {
     const issues = [], warn = [];
@@ -325,6 +521,7 @@ ${g.review_checklist.rubric.map(x => '- ' + x).join('\n')}`);
   }
 
   const SUBJECTS = ['국어', '사회', '수학', '과학', '영어'];   // 참고 사례가 있는 교과만 제안
-  const api = { SUBJECTS, bandOf, selectCases, compactCase, buildOutlinePrompt, buildProposalPrompt, validateProposal, toEvaluation, sheetText, rubricText };
+  const api = { SUBJECTS, bandOf, selectCases, compactCase, buildOutlinePrompt, buildProposalPrompt, validateProposal, toEvaluation, sheetText, rubricText,
+    mergeCases, buildSummativeOutlinePrompt, buildSummativePrompt, allocatePoints, levelsFor, normalizeSummative, validateSummative, summativeToEvaluation, summativeSheetText, summativeRubricText };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.ProposalCore = api;
 })(typeof self !== 'undefined' ? self : this);
