@@ -11,3 +11,12 @@ test('unreadable and blank answers have unresolved scores rather than fabricated
 test('valid response keeps evidence and recomputes totals',()=>{const a=C.normalizeAnswer({status:'readable',text:'문화유산',criteria:[{number:1,score:2,level:'중',reason:'이유',evidence:'문화유산'}]},rubric);assert.deepEqual(C.totals([a]),{total:2,max:3,unresolved:false});});
 test('invalid or ambiguous rubric is rejected',()=>{assert.equal(C.validateRubric(rubric),true);assert.throws(()=>C.validateRubric([{number:1,name:'x',scales:[{level:'상',score:3,criterion:''}]}]));});
 test('CSV formula injection and quotes are escaped',()=>{assert.equal(C.csvCell('=1+1'),'"\'=1+1"');assert.equal(C.csvCell('a"b'),'"a""b"');});
+test('give-up answers keep the rubric score and gain a teacher-check flag',()=>{
+  for(const t of ['잘 모르겠어요','모르겠습니다.','몰라요 ㅠㅠ','잘 모름','???','생각이 안 나요']) assert.equal(C.isGiveUpAnswer(t),true,t);
+  for(const t of ['순천만 습지는 갈대밭이 넓어서 자랑스럽습니다.','순천만, 갈대, 흑두루미','왜 자랑스러운지는 잘 모르겠지만 순천만에는 철새가 많이 옵니다.','']) assert.equal(C.isGiveUpAnswer(t),false,t);
+  const r=[{number:1,name:'내용',scales:[{level:'상',score:3},{level:'중',score:2},{level:'하',score:1}]}];
+  const a=C.normalizeAnswer({status:'readable',text:'잘 모르겠어요',criteria:[{number:1,level:'하',score:1,reason:'내용 없음'}],feedback:'',flags:[]},r);
+  assert.equal(a.criteria[0].score,1); assert.ok(a.flags.includes('답을 포기한 답안 — 확인 필요'));
+  const b=C.normalizeAnswer({status:'readable',text:'순천만 습지는 자랑스럽습니다',criteria:[{number:1,level:'중',score:2,reason:'일부'}],feedback:'',flags:[]},r);
+  assert.equal(b.flags.length,0);
+});

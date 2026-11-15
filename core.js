@@ -34,6 +34,13 @@
     }
     return true;
   }
+  const GIVE_UP_FLAG='답을 포기한 답안 — 확인 필요';
+  function isGiveUpAnswer(text){
+    const t=String(text||'').replace(/[\s.,!?~…·ㅠㅜ^;:'"()\-]/g,'');
+    if(/^[?？xX×ㅡ_\s]+$/.test(String(text||''))&&String(text||'').trim()) return true;   // 물음표·가위표만 쓴 답
+    if(!t||t.length>20) return false;   // 길게 쓴 답은 내용으로 판단
+    return /^(잘|정말|진짜|전혀|아직|저는|전|나는|난|선생님|죄송합니다|죄송해요)*(모르겠|모름|모릅니다|몰라|몰르겠|기억이?안|생각이?안|못쓰겠|못하겠|어려워서|어렵습니다|어려워요|없음$|없습니다$|패스$)/.test(t);
+  }
   function normalizeAnswer(data, rubric) {
     if(!data||!['readable','blank','unreadable'].includes(data.status)||typeof data.text!=='string'||!Array.isArray(data.criteria)) throw Error('AI 응답 구조가 올바르지 않습니다. 다시 시도하세요.');
     const unresolved=data.status!=='readable';
@@ -47,10 +54,12 @@
       if(!unresolved&&(!scale||typeof a.reason!=='string'||!a.reason.trim())) throw Error('AI 점수 또는 판정 근거가 루브릭과 맞지 않습니다.');
       return {number:c.number,name:c.name,score:unresolved?null:scale.score,level:unresolved?'':scale.level,reason:String(a?.reason||''),evidence:String(a?.evidence||''),max:Math.max(...c.scales.map(s=>s.score))};
     });
-    return {status:data.status,text:data.text,criteria,feedback:String(data.feedback||''),flags:[...(Array.isArray(data.flags)?data.flags.map(String):[]),...(data.status==='blank'?['무응답 확인 필요']:data.status==='unreadable'?['글씨 판독 확인 필요']:[])].slice(0,8)};
+    // 글자는 있지만 사실상 답을 포기한 답안("잘 모르겠어요" 등): 점수는 루브릭대로 두고, 교사가 챙길 수 있게 표시만 붙인다.
+    const gaveUp=!unresolved&&isGiveUpAnswer(data.text);
+    return {status:data.status,text:data.text,criteria,feedback:String(data.feedback||''),flags:[...(gaveUp?[GIVE_UP_FLAG]:[]),...(Array.isArray(data.flags)?data.flags.map(String).filter(f=>f!==GIVE_UP_FLAG):[]),...(data.status==='blank'?['무응답 확인 필요']:data.status==='unreadable'?['글씨 판독 확인 필요']:[])].slice(0,8)};
   }
   function totals(answers) { let total=0,max=0,unresolved=false; for(const a of answers) for(const c of a.criteria) { max+=c.max; if(c.score===null||!Number.isFinite(c.score)) unresolved=true; else total+=c.score; } return {total,max,unresolved}; }
   function csvCell(value) { let s=String(value??''); if(/^[\s]*[=+\-@]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; }
-  const api={replacementRequests,validateTargets,validateRubric,normalizeAnswer,totals,csvCell};
+  const api={replacementRequests,validateTargets,validateRubric,normalizeAnswer,isGiveUpAnswer,totals,csvCell};
   if(typeof module!=='undefined') module.exports=api; else root.GradingCore=api;
 })(typeof window==='undefined'?globalThis:window);
