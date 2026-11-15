@@ -243,7 +243,7 @@
     footer { text-align: center; color: var(--muted); font-size: 12px; padding: 24px 16px 32px; }
     footer a { color: var(--muted); }
   </style>
-<link rel="stylesheet" href="workspace.css?v=4.1.6">
+<link rel="stylesheet" href="workspace.css?v=4.2.0">
 </head>
 <body>
 
@@ -319,8 +319,9 @@
     <section id="tab-evaluations" class="tab-pane active">
       <div class="section-header">
         <div><div class="eyebrow">MY ASSESSMENTS</div><h2>선생님의 평가 작업실</h2><p class="helper">준비부터 피드백까지, 평가 하나씩 차근차근.</p></div>
-        <div style="display:flex; gap:8px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
           <button class="btn btn-ghost btn-small" onclick="loadEvaluations()">🔄 새로고침</button>
+          <button class="btn btn-secondary" onclick="Proposal.open()">✨ 성취기준으로 평가 제안받기</button>
           <button class="btn btn-primary" onclick="showEvaluationForm()">+ 새 평가 만들기</button>
         </div>
       </div>
@@ -451,7 +452,7 @@
       <div class="card">
         <h3>시스템 정보</h3>
         <ul style="list-style:none; font-size:13px; line-height:1.9; color:var(--text-sub);">
-          <li>· 버전: <strong>웹앱 v4.1.6 · 교사 검토 워크스페이스</strong> — Apps Script v12 시트 구조 호환</li>
+          <li>· 버전: <strong>웹앱 v4.2.0 · 교사 검토 워크스페이스</strong> — Apps Script v12 시트 구조 호환</li>
           <li>· 데이터 저장: 본인 Google Drive 스프레드시트 (서버 없음)</li>
           <li>· API 키 저장: 이 브라우저 (localStorage)</li>
           <li>· 권한 범위: drive.file</li>
@@ -467,13 +468,15 @@
 <div id="modal-overlay" class="modal-overlay"><div class="modal" id="modal-box" role="dialog" aria-modal="true" aria-label="평가 편집 및 안내" tabindex="-1"></div></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="core.js?v=4.1.6"></script>
-<script src="app.js?v=4.1.6"></script>
-<script src="workspace.js?v=4.1.6"></script>
-<script src="grading.js?v=4.1.6"></script>
+<script src="core.js?v=4.2.0"></script>
+<script src="app.js?v=4.2.0"></script>
+<script src="workspace.js?v=4.2.0"></script>
+<script src="grading.js?v=4.2.0"></script>
+<script src="proposal-core.js?v=4.2.0"></script>
+<script src="proposal.js?v=4.2.0"></script>
 <script src="https://apis.google.com/js/api.js" async defer onload="onGapiLoaded()"></script>
-<script src="quality-core.js?v=4.1.6"></script>
-<script src="quality-test.js?v=4.1.6"></script>
-<script src="boot.js?v=4.1.6"></script>
+<script src="quality-core.js?v=4.2.0"></script>
+<script src="quality-test.js?v=4.2.0"></script>
+<script src="boot.js?v=4.2.0"></script>
 </body>
 </html>
