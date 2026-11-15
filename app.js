@@ -5,7 +5,6 @@
 const CONFIG = {
   CLIENT_ID: '522445423766-m3cop5vh489598e0hkefumd0r202tncp.apps.googleusercontent.com',   // OAuth 2.0 클라이언트 ID (웹 애플리케이션)
   APP_ID:    '522445423766',                          // Google Cloud 프로젝트 번호 (Picker가 drive.file로 접근하려면 필요)
-  PICKER_KEY: 'AIzaSyDuMaSWfi7yfybCUJnUvghOcirBA5JzXoE',   // Google Picker용 브라우저 키 (공개되어도 되는 키 — Cloud 콘솔에서 knightayj52.github.io로 리퍼러 제한)
   SCOPES:    'https://www.googleapis.com/auth/drive.file',
   SHEET_TITLE: '서술형평가 채점 시스템'
 };
@@ -160,14 +159,15 @@ function onGapiLoaded() {
   state.gapiReady = true;
   gapi.load('picker', () => { state.pickerReady = true; });
 }
+// 파일 선택 창은 로그인 토큰과 앱 ID만으로 연다. 개인 키를 따로 저장한 경우에만 그 키를 함께 넘긴다.
+// (잘못된 키를 넘기면 Google이 "API 개발자 키가 잘못되었습니다" 오류 창을 먼저 띄운다.)
+function withPickerKey(builder) { const k = getPickerKey(); return k ? builder.setDeveloperKey(k) : builder; }
 function pickExistingSheet() {
   if (!state.pickerReady) { showToast('선택 창을 준비하는 중입니다. 잠시 후 다시 눌러 주세요.'); return; }
-  if (!getPickerKey()) { showSheetConnectionOptions(); return; }
   const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS).setIncludeFolders(false).setMode(google.picker.DocsViewMode.LIST);
-  const picker = new google.picker.PickerBuilder()
+  const picker = withPickerKey(new google.picker.PickerBuilder()
     .setAppId(CONFIG.APP_ID)
-    .setOAuthToken(state.token)
-    .setDeveloperKey(getPickerKey())
+    .setOAuthToken(state.token))
     .addView(view)
     .setTitle('채점 시스템 스프레드시트 선택')
     .setLocale('ko')
@@ -234,7 +234,7 @@ function renderSheetCreationIssue(issue) {
     return text.replace(/Bearer\s+\S+/gi,'Bearer [제외]').replace(/https?:\/\/[^\s<>]+/g,'[주소 제외]').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[이메일 제외]').replace(/[A-Za-z0-9_-]{40,}/g,'[식별자 제외]').slice(0,1500);
   };
   const safeCode = v => String(v || '').replace(/[^a-zA-Z0-9_ .:()[\]\/-]/g, '').slice(0,180);
-  createNewSheet.diagnostic = ['essay-grading 4.1.4', '단계: 새 스프레드시트 생성', 'HTTP: ' + (issue.http || '요청 전/응답 없음'), '상태: ' + safeCode(issue.status), '분류: ' + safeCode(issue.kind), '이유: ' + issue.reasons.map(safeCode).join(', '), '필드: ' + issue.fields.map(safeCode).join(', '), 'Google 설명: ' + safeMessage(issue.message), '시트 생성 권한: ' + ({true:'허용 기록 있음',false:'미허용',null:'이전 로그인 · 확인 필요'})[String(grantedSheetPermission())]].join('\n');
+  createNewSheet.diagnostic = ['essay-grading 4.1.5', '단계: 새 스프레드시트 생성', 'HTTP: ' + (issue.http || '요청 전/응답 없음'), '상태: ' + safeCode(issue.status), '분류: ' + safeCode(issue.kind), '이유: ' + issue.reasons.map(safeCode).join(', '), '필드: ' + issue.fields.map(safeCode).join(', '), 'Google 설명: ' + safeMessage(issue.message), '시트 생성 권한: ' + ({true:'허용 기록 있음',false:'미허용',null:'이전 로그인 · 확인 필요'})[String(grantedSheetPermission())]].join('\n');
   $('connect-status').innerHTML = `<div class="info-box" role="alert"><strong>${escapeHtml(issue.title)}</strong><p>${escapeHtml(issue.action)}</p>${['scope','auth','unknown'].includes(issue.kind)?`<button class="btn btn-primary" onclick="login(false, true)">Google 로그인·파일 권한 다시 확인</button>`:''}<details style="margin-top:12px"><summary>진단 내용 (계정·키 제외)</summary><pre style="white-space:pre-wrap">${escapeHtml(createNewSheet.diagnostic)}</pre><button class="btn btn-secondary" onclick="copySheetCreationDiagnostic()">진단 내용 복사</button></details></div>`;
 }
 async function copySheetCreationDiagnostic() {
@@ -1302,10 +1302,9 @@ async function handlePdfUpload(files) {
   await refreshPdfList();
 }
 function importPdfFromDrive() {
-  if (!getPickerKey()) { showPickerSettings(); return; }
   if (!state.pickerReady || !state.folder) { showToast('잠시 후 다시 시도해 주세요'); return; }
   const view = new google.picker.DocsView(google.picker.ViewId.DOCS).setMimeTypes('application/pdf').setIncludeFolders(true).setMode(google.picker.DocsViewMode.LIST);
-  new google.picker.PickerBuilder().setAppId(CONFIG.APP_ID).setOAuthToken(state.token).setDeveloperKey(getPickerKey())
+  withPickerKey(new google.picker.PickerBuilder().setAppId(CONFIG.APP_ID).setOAuthToken(state.token))
     .enableFeature(google.picker.Feature.MULTISELECT_ENABLED).addView(view).setTitle('답안 PDF 선택 (여러 개 가능)').setLocale('ko')
     .setCallback(async data => {
       if (data.action !== google.picker.Action.PICKED) return;
