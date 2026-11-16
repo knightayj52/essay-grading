@@ -20,3 +20,9 @@ test('give-up answers keep the rubric score and gain a teacher-check flag',()=>{
   const b=C.normalizeAnswer({status:'readable',text:'순천만 습지는 자랑스럽습니다',criteria:[{number:1,level:'중',score:2,reason:'일부'}],feedback:'',flags:[]},r);
   assert.equal(b.flags.length,0);
 });
+test('sheet found in the account: marked main wins, a single sheet connects, several ask the teacher',()=>{
+  const f=(id,m,main)=>({id,modifiedTime:m,appProperties:main?{egApp:'1',egMain:String(main)}:{}});
+  assert.equal(C.chooseSheet([]).auto,null);
+  assert.equal(C.chooseSheet([f('a','2026-11-01')]).auto,'a');
+  const many=C.chooseSheet([f('a','2026-11-01'),f('b','2026-11-10')]);assert.equal(many.auto,null);assert.deepEqual(many.list.map(x=>x.id),['b','a']);
+  assert.equal(C.chooseSheet([f('a','2026-11-01',5),f('b','2026-11-10'),f('c','2026-10-01',9)]).auto,'c');});

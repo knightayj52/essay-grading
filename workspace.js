@@ -105,6 +105,57 @@ function restoreReviewDraft(){const j=currentJob();if(!j)return;const d=readLoca
 escapeJs=function(s){return String(s??'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/[&<>"\n\r]/g,c=>({'&':'\\x26','<':'\\x3c','>':'\\x3e','"':'\\x22','\n':'\\n','\r':'\\r'}[c]));};
 function getPickerKey(){return localStorage.getItem('eg_picker_key')||'';}
 function showSheetConnectionOptions(){showModal(`<div class="modal-header"><strong>기존 평가 시트 연결</strong><button class="modal-close" onclick="closeModal()">×</button></div><p class="helper">이 앱에서 이전에 사용한 시트는 주소로 연결할 수 있습니다. 아직 접근을 허용하지 않은 파일은 Google 파일 선택 창에서 선택해야 합니다.</p><div class="form-row"><label for="sheet-url">Google 스프레드시트 주소</label><input type="text" id="sheet-url" placeholder="https://docs.google.com/spreadsheets/d/…"></div><div id="sheet-url-error" role="status"></div><div class="toolbar"><button class="btn btn-primary" onclick="connectSheetUrl()">주소로 연결</button><button class="btn btn-secondary" onclick="closeModal();pickExistingSheet()">Google에서 파일 선택</button></div>`);}
-async function connectSheetUrl(){const value=$('sheet-url').value.trim();const id=value.match(/^https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1];if(!id)return $('sheet-url-error').textContent='Google 스프레드시트 주소를 입력하세요.';const before=state.sheetId;try{state.sheetId=id;await checkAndMigrateSheet(false);localStorage.setItem(LS.SHEET_ID,id);closeModal();showApp();}catch(e){state.sheetId=before;$('sheet-url-error').textContent=e.message+' · 처음 사용하는 파일이라면 Google 파일 선택기로 접근 권한을 부여하세요.';}}
+async function connectSheetUrl(){const value=$('sheet-url').value.trim();const id=value.match(/^https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/)?.[1];if(!id)return $('sheet-url-error').textContent='Google 스프레드시트 주소를 입력하세요.';const before=state.sheetId;try{state.sheetId=id;await checkAndMigrateSheet(false);localStorage.setItem(LS.SHEET_ID,id);tagSheet(id,true);closeModal();showApp();}catch(e){state.sheetId=before;$('sheet-url-error').textContent=e.message+' · 처음 사용하는 파일이라면 Google 파일 선택기로 접근 권한을 부여하세요.';}}
 function showPickerSettings(){showModal(`<div class="modal-header"><strong>Google 파일 선택기 설정</strong><button class="modal-close" onclick="closeModal()">×</button></div><p class="helper">Google 파일 선택 창을 여는 데 쓰는 키입니다. Gemini 키와 별개입니다. 이 앱에는 기본 키가 들어 있어 <strong>보통은 입력할 필요가 없습니다.</strong> 파일 선택 창이 열리지 않을 때만 관리자 안내에 따라 입력하세요.</p><p class="helper">이 설정 없이도 새 시트를 만들거나 PDF를 기기에서 직접 업로드할 수 있습니다.</p><div class="form-row"><label for="picker-key">Picker API 키</label><input id="picker-key" type="password" autocomplete="off" placeholder="이 브라우저에만 저장"></div><div class="toolbar"><button class="btn btn-primary" onclick="savePickerKey()">브라우저에 저장</button><button class="btn btn-ghost" onclick="localStorage.removeItem('eg_picker_key');closeModal();showToast('파일 선택기 키를 삭제했습니다.')">키 삭제</button></div>`);}
 function savePickerKey(){const key=$('picker-key').value.trim();if(key.length<20)return showToast('키를 확인하세요.');localStorage.setItem('eg_picker_key',key);closeModal();showToast('파일 선택기 키를 이 브라우저에 저장했습니다.');}
+
+/* ============================================================
+   계정에서 채점 시트 자동 찾기 — 다른 기기·브라우저에서 로그인해도 같은 시트로 이어지게
+   drive.file 권한으로는 이 앱이 만들었거나 이 앱으로 연 파일만 보이므로, 보이는 스프레드시트 = 이 앱의 시트 후보
+   ============================================================ */
+const SHEET_MIME='application/vnd.google-apps.spreadsheet';
+async function findMySheets(){
+  const files=await driveList(`mimeType='${SHEET_MIME}' and trashed=false`,'id,name,modifiedTime,appProperties');
+  const tagged=files.filter(f=>f.appProperties&&f.appProperties.egApp==='1');
+  const rest=files.filter(f=>!tagged.includes(f)).sort((a,b)=>String(b.modifiedTime||'').localeCompare(String(a.modifiedTime||''))).slice(0,8);
+  // 표시가 없는 파일은 '평가목록' 탭이 있는지로 채점 시트인지 확인
+  const checked=await Promise.all(rest.map(async f=>{try{const r=await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${f.id}?fields=sheets.properties.title`);if(!r.ok)return null;const m=await r.json();return (m.sheets||[]).some(s=>s.properties.title==='평가목록')?f:null;}catch(e){return null;}}));
+  return tagged.concat(checked.filter(Boolean));
+}
+async function tagSheet(id,main){
+  try{const props={egApp:'1'};if(main)props.egMain=String(Date.now());await authFetch(DRIVE_API+'/'+id+'?fields=id',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({appProperties:props})});}catch(e){}
+}
+async function useSheet(id,message){
+  const before=state.sheetId;
+  try{state.sheetId=id;await checkAndMigrateSheet(false);localStorage.setItem(LS.SHEET_ID,id);tagSheet(id,true);closeModal();showApp();if(message)showToast(message);return true;}
+  catch(e){state.sheetId=before;const el=$('connect-status');if(el)el.textContent='⚠ '+e.message;return false;}
+}
+async function sheetEvalCount(id){try{const r=await authFetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent('평가목록!A2:A')}`);if(!r.ok)return null;return ((await r.json()).values||[]).filter(v=>v[0]).length;}catch(e){return null;}}
+async function mySheetsHtml(list,currentId){
+  const counts=await Promise.all(list.slice(0,8).map(f=>sheetEvalCount(f.id)));
+  return `<div class="my-sheets"><strong>이 계정에서 찾은 채점 시트 ${list.length}개</strong><p class="helper">쓰실 시트를 고르면 다른 기기에서도 그 시트로 자동 연결됩니다.</p>${list.slice(0,8).map((f,i)=>`<div class="my-sheet"><div><b>${escapeHtml(f.name)}</b>${f.id===currentId?' <span class="badge">지금 사용 중</span>':''}<br><span class="helper">평가 ${counts[i]==null?'?':counts[i]}개 · 마지막 수정 ${escapeHtml(String(f.modifiedTime||'').slice(0,10))} · <a href="https://docs.google.com/spreadsheets/d/${f.id}" target="_blank" rel="noopener">시트 열기</a></span></div><button class="btn btn-primary btn-small" onclick="useSheet('${f.id}','이 시트로 연결했습니다. 다른 기기에서도 이 시트가 열립니다.')">이 시트 사용</button></div>`).join('')}</div>`;
+}
+// 로그인 직후 연결된 시트가 없을 때: 찾아서 하나로 정해지면 바로 연결, 여러 개면 목록을 보여 준다
+async function autoConnectSheet(allowAuto){
+  showConnect();const el=$('connect-status');el.innerHTML='<span class="spinner"></span>이 계정에서 쓰던 채점 시트를 찾는 중...';
+  let files=[];try{files=await findMySheets();}catch(e){el.textContent='';return false;}
+  const pick=GradingCore.chooseSheet(files);
+  if(allowAuto&&pick.auto&&await useSheet(pick.auto,'이 계정에서 쓰던 채점 시트를 찾아 연결했습니다.'))return true;
+  if(pick.list.length)el.innerHTML=await mySheetsHtml(pick.list,null);
+  else el.innerHTML='이 계정에서 이 앱으로 만든 채점 시트를 찾지 못했습니다. 처음이면 "새 스프레드시트 만들기"를, Apps Script 버전에서 쓰던 시트가 있으면 "기존 스프레드시트 연결"을 눌러 주세요.';
+  return false;
+}
+// 이미 연결된 기기: 주 시트 표시가 아직 어디에도 없으면 지금 시트를 주 시트로 표시해 다른 기기가 따라오게 한다
+async function markCurrentSheetIfNone(){
+  try{const files=await driveList(`mimeType='${SHEET_MIME}' and trashed=false`,'id,appProperties');const mains=files.filter(f=>f.appProperties&&Number(f.appProperties.egMain)>0);
+    if(!mains.length)return tagSheet(state.sheetId,true);
+    const top=mains.sort((a,b)=>Number(b.appProperties.egMain)-Number(a.appProperties.egMain))[0];
+    if(top.id!==state.sheetId){const box=$('workspace-context');if(box){box.hidden=false;box.innerHTML='⚠ 다른 기기에서는 다른 채점 시트를 쓰고 있습니다. 평가가 나뉘어 저장되지 않도록 <button class="btn btn-ghost btn-small" onclick="showMySheets()">시트 목록에서 하나로 맞추기</button>';}}
+  }catch(e){}
+}
+async function showMySheets(){
+  showModal('<div class="modal-header"><strong>내 계정의 채점 시트</strong><button class="modal-close" onclick="closeModal()">×</button></div><div id="my-sheets-box"><span class="spinner"></span>찾는 중...</div>');
+  try{const files=await findMySheets();const box=$('my-sheets-box');if(!box)return;box.innerHTML=files.length?await mySheetsHtml(GradingCore.chooseSheet(files).list,state.sheetId):'<p class="helper">이 계정에서 찾은 채점 시트가 없습니다.</p>';}
+  catch(e){const box=$('my-sheets-box');if(box)box.textContent='시트 목록을 불러오지 못했습니다: '+e.message;}
+}
+disconnectSheet=function(){if(!confirm('이 브라우저에서 스프레드시트 연결을 해제할까요? (시트 자체는 삭제되지 않습니다)'))return;localStorage.removeItem(LS.SHEET_ID);state.sheetId=null;autoConnectSheet(false);};

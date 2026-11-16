@@ -60,6 +60,14 @@
   }
   function totals(answers) { let total=0,max=0,unresolved=false; for(const a of answers) for(const c of a.criteria) { max+=c.max; if(c.score===null||!Number.isFinite(c.score)) unresolved=true; else total+=c.score; } return {total,max,unresolved}; }
   function csvCell(value) { let s=String(value??''); if(/^[\s]*[=+\-@]/.test(s)) s="'"+s; return '"'+s.replace(/"/g,'""')+'"'; }
-  const api={replacementRequests,validateTargets,validateRubric,normalizeAnswer,isGiveUpAnswer,totals,csvCell};
+  // 계정에서 찾은 채점 시트 가운데 무엇을 쓸지: 주 시트 표시(egMain)가 가장 최근인 것 → 하나뿐이면 그것 → 여러 개면 교사가 고른다
+  function chooseSheet(files){
+    const list=(files||[]).filter(f=>f&&f.id).slice().sort((a,b)=>String(b.modifiedTime||'').localeCompare(String(a.modifiedTime||'')));
+    const mains=list.filter(f=>f.appProperties&&Number(f.appProperties.egMain)>0).sort((a,b)=>Number(b.appProperties.egMain)-Number(a.appProperties.egMain));
+    if(mains.length) return {auto:mains[0].id,list};
+    if(list.length===1) return {auto:list[0].id,list};
+    return {auto:null,list};
+  }
+  const api={chooseSheet,replacementRequests,validateTargets,validateRubric,normalizeAnswer,isGiveUpAnswer,totals,csvCell};
   if(typeof module!=='undefined') module.exports=api; else root.GradingCore=api;
 })(typeof window==='undefined'?globalThis:window);

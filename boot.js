@@ -14,10 +14,11 @@
   renderUserChip();
 
   state.sheetId = localStorage.getItem(LS.SHEET_ID);
-  if (!state.sheetId) { showConnect(); renderApiKeyStatus(); return; }
+  if (!state.sheetId) { renderApiKeyStatus(); await autoConnectSheet(true); return; }   // 다른 기기에서 쓰던 시트를 계정에서 찾아 자동 연결
   try {
     await checkAndMigrateSheet(false);  // 접근 확인 + 구조 보완
     showApp();
+    markCurrentSheetIfNone();
   } catch (e) {
     showConnect(); $('connect-status').textContent = '연결 확인 실패: ' + e.message + ' · 기존 연결은 보존했습니다. 새로고침하거나 시트를 다시 선택하세요.';
   }

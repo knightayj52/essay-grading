@@ -178,6 +178,7 @@ function pickExistingSheet() {
       try {
         state.sheetId = doc.id; localStorage.setItem(LS.SHEET_ID, doc.id);
         await checkAndMigrateSheet(false);
+        tagSheet(doc.id, true);
         showToast('스프레드시트를 연결했습니다');
         showApp();
       } catch (e) {
@@ -234,7 +235,7 @@ function renderSheetCreationIssue(issue) {
     return text.replace(/Bearer\s+\S+/gi,'Bearer [제외]').replace(/https?:\/\/[^\s<>]+/g,'[주소 제외]').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[이메일 제외]').replace(/[A-Za-z0-9_-]{40,}/g,'[식별자 제외]').slice(0,1500);
   };
   const safeCode = v => String(v || '').replace(/[^a-zA-Z0-9_ .:()[\]\/-]/g, '').slice(0,180);
-  createNewSheet.diagnostic = ['essay-grading 4.3.0', '단계: 새 스프레드시트 생성', 'HTTP: ' + (issue.http || '요청 전/응답 없음'), '상태: ' + safeCode(issue.status), '분류: ' + safeCode(issue.kind), '이유: ' + issue.reasons.map(safeCode).join(', '), '필드: ' + issue.fields.map(safeCode).join(', '), 'Google 설명: ' + safeMessage(issue.message), '시트 생성 권한: ' + ({true:'허용 기록 있음',false:'미허용',null:'이전 로그인 · 확인 필요'})[String(grantedSheetPermission())]].join('\n');
+  createNewSheet.diagnostic = ['essay-grading 4.4.0', '단계: 새 스프레드시트 생성', 'HTTP: ' + (issue.http || '요청 전/응답 없음'), '상태: ' + safeCode(issue.status), '분류: ' + safeCode(issue.kind), '이유: ' + issue.reasons.map(safeCode).join(', '), '필드: ' + issue.fields.map(safeCode).join(', '), 'Google 설명: ' + safeMessage(issue.message), '시트 생성 권한: ' + ({true:'허용 기록 있음',false:'미허용',null:'이전 로그인 · 확인 필요'})[String(grantedSheetPermission())]].join('\n');
   $('connect-status').innerHTML = `<div class="info-box" role="alert"><strong>${escapeHtml(issue.title)}</strong><p>${escapeHtml(issue.action)}</p>${['scope','auth','unknown'].includes(issue.kind)?`<button class="btn btn-primary" onclick="login(false, true)">Google 로그인·파일 권한 다시 확인</button>`:''}<details style="margin-top:12px"><summary>진단 내용 (계정·키 제외)</summary><pre style="white-space:pre-wrap">${escapeHtml(createNewSheet.diagnostic)}</pre><button class="btn btn-secondary" onclick="copySheetCreationDiagnostic()">진단 내용 복사</button></details></div>`;
 }
 async function copySheetCreationDiagnostic() {
@@ -275,6 +276,7 @@ async function createNewSheet() {
     createdId = ss.spreadsheetId; state.sheetId = createdId;
     state.sheetIds = Object.fromEntries((ss.sheets || []).map(s => [s.properties.title,s.properties.sheetId]));
     localStorage.setItem(LS.SHEET_ID, createdId);
+    tagSheet(createdId, true);
     showToast('새 스프레드시트를 만들었습니다');
     showApp();
   } catch (e) {

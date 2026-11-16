@@ -6,7 +6,7 @@
 */
 (function () {
   'use strict';
-  const PC = window.ProposalCore, VER = '4.3.0';
+  const PC = window.ProposalCore, VER = '4.4.0';
   const PS = { step: 'pick', mode: 'single', stds: [], qCount: 3, total: 100, subject: '국어', grade: 4, query: '', std: null, note: '', outlines: null, outline: null, proposal: null, busy: '', error: '' };
   let DATA = null;
   const esc = s => escapeHtml(s);
